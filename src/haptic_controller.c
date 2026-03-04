@@ -57,7 +57,8 @@ void hapt_Init(void)
     // added code
     comm_monitorFloat("spring constant", (float32_t*)&spring_k, READWRITE);
     comm_monitorFloat("zero_angle", (float32_t*)&zero_angle, READWRITE);
-    comm_monitorFloat("relative_angle", (float32_t*)&relative_angle, READWRITE);
+    comm_monitorFloat("relative_angle", (float32_t*)&relative_angle, READONLY);
+
 }
 
 /**
@@ -83,8 +84,8 @@ void hapt_Update()
 
     // Compute the motor torque, and apply it.
     //hapt_motorTorque = 0.0f;
-    relative_angle = zero_angle + hapt_encoderPaddleAngle;
-    hapt_motorTorque = -relative_angle*spring_k/ REDUCTION_RATIO;
+    relative_angle = hapt_hallVoltage* 48.7132 -96.7068;
+    //hapt_motorTorque = -relative_angle*spring_k/ REDUCTION_RATIO;
 
     torq_SetTorque(hapt_motorTorque);
 }
