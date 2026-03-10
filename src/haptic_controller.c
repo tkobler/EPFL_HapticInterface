@@ -48,6 +48,14 @@ float32_t prev_velocity_1 = 0;
 float32_t prev_velocity_2 = 0;
 
 
+float32_t filtred_vel = 0;
+float32_t prev_fil_vel = 0;
+float32_t filtred_acc = 0;
+float32_t prev_fil_acc = 0;
+
+float32_t tao = 1/(200*2*3.14); // filter time constant
+
+
 
 void hapt_Update(void);
 
@@ -78,6 +86,8 @@ void hapt_Init(void)
     comm_monitorFloat("vel_2sample", (float32_t*)&paddle_velocity_2, READONLY);
     comm_monitorFloat("acc_1sample", (float32_t*)&paddle_acc_1, READONLY);
     comm_monitorFloat("acc_2sample", (float32_t*)&paddle_acc_2, READONLY);
+    comm_monitorFloat("filtred speed", (float32_t*)&filtred_vel, READONLY);
+    comm_monitorFloat("filtred acceleration", (float32_t*)&filtred_acc, READONLY);
 
 }
 
@@ -110,8 +120,8 @@ void hapt_Update()
 
     // Compute velocity and acceleration
     float32_t angle;
-    //angle = hapt_encoderPaddleAngle;
-    angle = relative_angle;
+    angle = hapt_encoderPaddleAngle;
+    //angle = relative_angle;
 
     // ----- Velocity (1 sampling period)
     paddle_velocity_1 = (angle - prev_angle_1) / dt;
@@ -127,5 +137,14 @@ void hapt_Update()
     prev_angle_1 = angle;
     prev_velocity_2 = prev_velocity_1;
     prev_velocity_1 = paddle_velocity_1;
+
+    // filtering
+    float32_t alpha = dt/(tao + dt);
+    filtred_vel = alpha*paddle_velocity_1 + (1-alpha)*prev_fil_vel;
+    prev_fil_vel = filtred_vel;
+    filtred_acc = alpha*paddle_acc_1 + (1-alpha)*prev_fil_acc;
+    prev_fil_acc = filtred_acc;
+
+    // motor characteristics
 }
 
