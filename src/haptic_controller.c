@@ -34,6 +34,21 @@ volatile float32_t spring_k = 0.01; //
 volatile float32_t zero_angle = 0; //
 volatile float32_t relative_angle;
 
+// Velocity and acceleration computation
+volatile float32_t paddle_velocity_1;   // velocity with 1 sample differentiation
+volatile float32_t paddle_velocity_2;   // velocity with 2 samples differentiation
+
+volatile float32_t paddle_acc_1;        // acceleration with 1 sample differentiation
+volatile float32_t paddle_acc_2;        // acceleration with 2 samples differentiation
+
+float32_t prev_angle_1 = 0;
+float32_t prev_angle_2 = 0;
+
+float32_t prev_velocity_1 = 0;
+float32_t prev_velocity_2 = 0;
+
+
+
 void hapt_Update(void);
 
 /**
@@ -54,10 +69,15 @@ void hapt_Init(void)
     comm_monitorFloat("encoder_paddle_pos [deg]", (float32_t*)&hapt_encoderPaddleAngle, READONLY);
     comm_monitorFloat("hall_voltage [V]", (float32_t*)&hapt_hallVoltage, READONLY);
 
-    // added code
+    // added display constant
     comm_monitorFloat("spring constant", (float32_t*)&spring_k, READWRITE);
     comm_monitorFloat("zero_angle", (float32_t*)&zero_angle, READWRITE);
     comm_monitorFloat("relative_angle", (float32_t*)&relative_angle, READONLY);
+
+    comm_monitorFloat("vel_1sample", (float32_t*)&paddle_velocity_1, READONLY);
+    comm_monitorFloat("vel_2sample", (float32_t*)&paddle_velocity_2, READONLY);
+    comm_monitorFloat("acc_1sample", (float32_t*)&paddle_acc_1, READONLY);
+    comm_monitorFloat("acc_2sample", (float32_t*)&paddle_acc_2, READONLY);
 
 }
 
@@ -70,7 +90,7 @@ void hapt_Update()
     float32_t motorShaftAngle; // [deg].
 
     // Compute the dt (uncomment if you need it).
-    //float32_t dt = ((float32_t)cbt_GetHapticControllerPeriod()) / 1000000.0f; // [s].
+    float32_t dt = ((float32_t)cbt_GetHapticControllerPeriod()) / 1000000.0f; // [s].
 
     // Increment the timestamp.
     hapt_timestamp += cbt_GetHapticControllerPeriod();
@@ -86,7 +106,26 @@ void hapt_Update()
     //hapt_motorTorque = 0.0f;
     relative_angle = hapt_hallVoltage* 48.7132 -96.7068;
     //hapt_motorTorque = -relative_angle*spring_k/ REDUCTION_RATIO;
-
     torq_SetTorque(hapt_motorTorque);
+
+    // Compute velocity and acceleration
+    float32_t angle;
+    //angle = hapt_encoderPaddleAngle;
+    angle = relative_angle;
+
+    // ----- Velocity (1 sampling period)
+    paddle_velocity_1 = (angle - prev_angle_1) / dt;
+    // ----- Velocity (2 sampling periods)
+    paddle_velocity_2 = (angle - prev_angle_2) / (2*dt);
+
+    // ----- Acceleration (1 sampling period)
+    paddle_acc_1 = (paddle_velocity_1 - prev_velocity_1) / dt;
+    // ----- Acceleration (2 sampling periods)
+    paddle_acc_2 = (paddle_velocity_1 - prev_velocity_2) / (2*dt);
+
+    prev_angle_2 = prev_angle_1;
+    prev_angle_1 = angle;
+    prev_velocity_2 = prev_velocity_1;
+    prev_velocity_1 = paddle_velocity_1;
 }
 
