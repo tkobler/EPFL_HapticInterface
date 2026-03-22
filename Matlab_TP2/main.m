@@ -32,7 +32,7 @@ J_eq  = J_p + R*R*(J_m + J_rotor); % Equivalent total inertia, computed on the p
 B_eq  = R*R*B_m + B_p ; % Equivalent viscous friction coefficient, computed on the paddle side [Nm*s/rad].
 Tau_f_dry = 0.001; % Identified dry friction paddle side
 
-phi_target = 5.00; % angle cible en deg 
+phi_target = 10.00; % angle cible [deg]  % -> change to RAD if we use it ====================================
 
 %% Run the Simulink simulation.
 sim('HapticPaddle')
