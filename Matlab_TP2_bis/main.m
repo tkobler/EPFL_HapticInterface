@@ -32,40 +32,30 @@ J_eq  = (J_p + R^2*(J_rotor + J_m)); % Equivalent total inertia, computed on the
 B_eq  = B_p + R^2*B_m; % Equivalent viscous friction coefficient, computed on the paddle side [Nm*s/rad].
 Tau_f_dry = 0.00156; % Identified dry friction paddle side
 
-% PID tuning
-%PID_tunning_enabled = false;
-PID_tunning_enabled = true;
-target_position = 20;
-PID_reduction_gain = 1000000;
-Kp = 5;
-Kd = 1;
-Ki = 5;
+phi_target = 10.00; % angle cible [deg]  % -> change to RAD if we use it ====================================
 
 %% Run the Simulink simulation.
 sim('HapticPaddle_vR2018b.mdl');
 
 %% Plot the simulation results.
-t = tiledlayout(3,2); 
-title(t, 'Analysis of Four Variables'); % Overall figure title
-xlabel(t, 'Time (0.1ms)');                 % Shared X-label (optional)
+figure;
 
-% 3. Plot each variable
-nexttile
-plot(omega_dot, 'r')
-title('Acceleration (m^2/s)')
+subplot(3,1,1)
+hold on
+plot(phi, 'g') % position réelle
+plot(phi_target * ones(size(phi)), 'r--') % target constante
+hold off
 
-nexttile
-plot(omega, 'b')
-title('Speed (m/s)')
+ylabel('\phi [rad]')
+title('Angle')
+legend('phi', 'phi Taarget')
 
-nexttile
-plot(phi, 'g')
-title('Position (m)')
+subplot(3,1,2)
+plot(omega)
+ylabel('\omega [rad/s]')
+title('Angular speed')
 
-nexttile
-plot(motor_torque, 'm')
-title('Torque (Nm)')
-
-nexttile
-plot(error, 'm')
-title('PID error')
+subplot(3,1,3)
+plot(omega_dot)
+ylabel('\omega_dot [rad/s^2]')
+title('Angular acceleration')

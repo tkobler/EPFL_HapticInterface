@@ -28,9 +28,9 @@ g       = 9.81; % Gravity [N/kg].
 % Computed constants.
 R = r_p1 / r_m; % Reduction ratio of the cable transmission [].
 %************************* TO BE COMLPETED ********************************
-J_eq  = J_p + R^2*(J_m + J_rotor); % Equivalent total inertia, computed on the paddle side [kg*m^2].
-B_eq  = R^2*B_m + B_p ; % Equivalent viscous friction coefficient, computed on the paddle side [Nm*s/rad].
-Tau_f_dry = 0.0015; % Identified dry friction paddle side
+J_eq  = (J_p + R^2*(J_rotor + J_m)); % Equivalent total inertia, computed on the paddle side [kg*m^2].
+B_eq  = B_p + R^2*B_m; % Equivalent viscous friction coefficient, computed on the paddle side [Nm*s/rad].
+Tau_f_dry = 0.00156; % Identified dry friction paddle side
 
 phi_target = 10.00; % angle cible [deg]  % -> change to RAD if we use it ====================================
 
