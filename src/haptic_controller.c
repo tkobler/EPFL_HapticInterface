@@ -162,7 +162,7 @@ void hapt_Update(void)
 
     // Get the Hall sensor voltage and derive angle.
     hapt_hallVoltage = hall_GetVoltage();
-    relative_angle   = hapt_hallVoltage * 48.7132f - 96.7068f;
+    relative_angle   = hapt_hallVoltage * 48.7132f - 96.7068f - zero_angle;
 
     // Get the encoder position.
     motorShaftAngle        = enc_GetPosition();
