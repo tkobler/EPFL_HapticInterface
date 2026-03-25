@@ -30,13 +30,9 @@ R = r_p1 / r_m; % Reduction ratio of the cable transmission [].
 %************************* TO BE COMLPETED ********************************
 J_eq  = (J_p + R^2*(J_rotor + J_m)); % Equivalent total inertia, computed on the paddle side [kg*m^2].
 B_eq  = B_p + R^2*B_m; % Equivalent viscous friction coefficient, computed on the paddle side [Nm*s/rad].
-Tau_f_dry = 0.0012; % Identified dry friction paddle side
+Tau_f_dry = 0.00156; % Identified dry friction paddle side
 
-phi_target = 10.0; % angle cible [deg] 
-Kp = 0.001; 
-Kd = 0.001; 
-Ki = 0.0005; 
-
+phi_target = 10.00; % angle cible [deg]  % -> change to RAD if we use it ====================================
 
 %% Run the Simulink simulation.
 sim('HapticPaddle_vR2018b.mdl');
@@ -47,19 +43,21 @@ figure;
 subplot(3,1,1)
 hold on
 plot(phi, 'g') % position réelle
-% plot(phi_target * ones(size(phi)), 'r--') % target constante
+plot(phi_target * ones(size(phi)), 'r--') % target constante
 hold off
-
-% ylabel('\phi [rad]')
-% title('Angle')
-% legend('phi', 'phi Target')
+xlabel('time [s]')
+ylabel('\phi [rad]')
+title('Angle')
+legend('phi', 'phi Taarget')
 
 subplot(3,1,2)
 plot(omega)
+xlabel('time [s]')
 ylabel('\omega [rad/s]')
 title('Angular speed')
 
 subplot(3,1,3)
 plot(omega_dot)
+xlabel('time [s]')
 ylabel('\omega_dot [rad/s^2]')
 title('Angular acceleration')
