@@ -61,6 +61,11 @@ float32_t prev_fil_vel   = 0.0f;
 float32_t filtred_acc    = 0.0f;
 float32_t prev_fil_acc   = 0.0f;
 
+float32_t comp_filtred_vel_dry    = 0.0f;
+float32_t comp_prev_fil_vel_dry   = 0.0f;
+float32_t comp_filtred_vel_visc    = 0.0f;
+float32_t comp_prev_fil_vel_visc   = 0.0f;
+
 float32_t tao = 1.0f / (200.0f * 2.0f * 3.14159265f); // Velocity/accel filter time constant [s].
 
 // ---------------------------------------------------------------------------
@@ -123,11 +128,15 @@ volatile uint32_t comp_viscous_enabled  = 0;  // Viscous friction compensation
 volatile uint32_t comp_gravity_enabled  = 0;  // Gravity compensation
 
 // --- Tunable parameters ---
+// filter
+float32_t tao_dry = 1.0f / (100.0f * 2.0f * 3.14159265f); // Velocity/accel filter time constant [s].
+float32_t tao_visc = 1.0f / (200.0f * 2.0f * 3.14159265f); // Velocity/accel filter time constant [s].
 // Coulomb friction coefficient [N.m]: torque to overcome static/kinetic friction.
-volatile float32_t comp_Fc             = 0.001f;
+volatile float32_t comp_Fc_ccw             = 0.001f;
+volatile float32_t comp_Fc_cw             = 0.0006f;
 
 // Viscous damping coefficient [N.m.s/deg]: b such that τ_visc = b * ω.
-volatile float32_t comp_b              = 0.0005f;
+volatile float32_t comp_b              = 0.0000029943f;
 
 // Gravity amplitude m*g*L [N.m].  Default computed from hardware specs.
 volatile float32_t comp_mgl            = PADDLE_MGL_DEFAULT;
@@ -197,12 +206,14 @@ void hapt_Init(void)
     comm_monitorUint32("comp_gravity_enabled", (uint32_t*)&comp_gravity_enabled, READWRITE);
 
     // Tunable gains
-    comm_monitorFloat("comp_Fc [N.m]",         (float32_t*)&comp_Fc,            READWRITE);
+    comm_monitorFloat("comp_Fc_cw [N.m]",         (float32_t*)&comp_Fc_cw,            READWRITE);
+    comm_monitorFloat("comp_Fc_ccw [N.m]",         (float32_t*)&comp_Fc_ccw,            READWRITE);
     comm_monitorFloat("comp_b [N.m.s/deg]",    (float32_t*)&comp_b,             READWRITE);
     comm_monitorFloat("comp_mgl [N.m]",        (float32_t*)&comp_mgl,           READWRITE);
     comm_monitorFloat("comp_vel_deadband [d/s]",(float32_t*)&comp_vel_deadband, READWRITE);
 
     // Diagnostics
+    comm_monitorFloat("comp_velocityy",           (float32_t*)&comp_filtred_vel_visc, READONLY);
     comm_monitorFloat("comp_torque_total [N.m]",(float32_t*)&comp_torque_total, READONLY);
 
 //    // mesure du frottement
@@ -340,18 +351,25 @@ void hapt_Update(void)
 	// Friction and gravity compensation
     // -----------------------------------------------------------------------
     float32_t tau_comp = 0.0f;
+    hapt_motorTorque = 0.0f;
+    float32_t alpha_dry = dt / (tao_dry + dt);
+    float32_t alpha_visc = dt / (tao_visc + dt);
+	comp_filtred_vel_dry  = alpha_dry * paddle_velocity_1 + (1.0f - alpha_dry) * comp_prev_fil_vel_dry;
+	comp_prev_fil_vel_dry= comp_filtred_vel_dry;
+	comp_filtred_vel_visc  = alpha_visc * paddle_velocity_1 + (1.0f - alpha_visc) * comp_prev_fil_vel_visc;
+	comp_prev_fil_vel_visc = comp_filtred_vel_visc;
 
     // 1. Dry friction compensation
     //    Uses the low-pass filtered velocity to avoid sign chatter from noise.
     if (comp_dry_enabled)
     {
-        if (filtred_vel > comp_vel_deadband)
+        if (comp_filtred_vel_dry > comp_vel_deadband)
         {
-            tau_comp += comp_Fc;          // moving in positive direction
+            tau_comp += comp_Fc_ccw;          // moving in positive direction
         }
-        else if (filtred_vel < -comp_vel_deadband)
+        else if (comp_filtred_vel_dry < -comp_vel_deadband)
         {
-            tau_comp -= comp_Fc;          // moving in negative direction
+            tau_comp -= comp_Fc_cw;          // moving in negative direction
         }
         // Inside the dead-band: no dry compensation (paddle nearly stationary)
     }
@@ -360,7 +378,7 @@ void hapt_Update(void)
     //    τ_visc = b * ω  — again uses the filtered velocity.
     if (comp_viscous_enabled)
     {
-        tau_comp += comp_b * filtred_vel;  // ici on peut peut-être mettre un filtre moins restrictif
+        tau_comp += comp_b * comp_filtred_vel_visc/15;  // ici on peut peut-être mettre un filtre moins restrictif
     }
 
     // 3. Gravity compensation
@@ -370,7 +388,7 @@ void hapt_Update(void)
     if (comp_gravity_enabled)
     {
         float32_t theta_rad = hapt_encoderPaddleAngle * DEG2RAD;
-        tau_comp += comp_mgl * sinf(theta_rad);
+        tau_comp += comp_mgl * sin(theta_rad)/REDUCTION_RATIO;
     }
 
     // Record diagnostic and apply
