@@ -43,7 +43,9 @@ volatile float32_t spring_k  = 0.01f;
 volatile float32_t zero_angle = 0.0f;
 volatile float32_t relative_angle;
 
-// Velocity and acceleration computation
+// -----------------------------------------------------------------------
+// Velocity and acceleration estimation (unchanged from original)
+// -----------------------------------------------------------------------
 volatile float32_t paddle_velocity_1; // velocity with 1 sample differentiation
 volatile float32_t paddle_velocity_2; // velocity with 2 samples differentiation
 volatile float32_t paddle_acc_1;      // acceleration with 1 sample differentiation
@@ -97,6 +99,48 @@ static float32_t pid_filtered_pos      = 0.0f;  // Low-pass filtered measured po
 
 void hapt_Update(void);
 
+// -----------------------------------------------------------------------
+// dry friction estimation
+// -----------------------------------------------------------------------
+volatile uint32_t stiction_mode  = 0;   // 0=off, 1=pos, 2=neg
+volatile float32_t stiction_step  = 0.001f; // torque increment [N.m]
+volatile float32_t stiction_found = 0.0f;   // last measured τ_s
+volatile float32_t vel_threshold  = 5.0f;   // movement threshold [deg/s]
+
+static float32_t stict_torque = 0.0f;
+static uint32_t  stict_hold   = 0;    // hold counter before increment
+
+// -----------------------------------------------------------------------
+// Friction and gravity compensation
+// -----------------------------------------------------------------------
+#define PADDLE_MGL_DEFAULT  0.01896f   // 0.077*9.81*0.0251 [N.m]  m * g * L
+#define PI_F                3.14159265f
+#define DEG2RAD             (PI_F / 180.0f)
+
+// --- Enable flags (0 = OFF, 1 = ON) — togglable from the remote interface ---
+volatile uint32_t comp_dry_enabled      = 0;  // Dry (Coulomb) friction compensation
+volatile uint32_t comp_viscous_enabled  = 0;  // Viscous friction compensation
+volatile uint32_t comp_gravity_enabled  = 0;  // Gravity compensation
+
+// --- Tunable parameters ---
+// Coulomb friction coefficient [N.m]: torque to overcome static/kinetic friction.
+volatile float32_t comp_Fc             = 0.001f;
+
+// Viscous damping coefficient [N.m.s/deg]: b such that τ_visc = b * ω.
+volatile float32_t comp_b              = 0.0005f;
+
+// Gravity amplitude m*g*L [N.m].  Default computed from hardware specs.
+volatile float32_t comp_mgl            = PADDLE_MGL_DEFAULT;
+
+// Velocity dead-band for dry friction compensation [deg/s].
+// Below this threshold the velocity sign is unreliable; dry compensation
+// is suppressed to prevent chattering / torque reversal near standstill.
+volatile float32_t comp_vel_deadband   = 3.0f;
+
+// Read-only diagnostic: total compensation torque applied this cycle [N.m].
+volatile float32_t comp_torque_total   = 0.0f;
+
+
 /**
   * @brief Initializes the haptic controller.
   */
@@ -145,6 +189,27 @@ void hapt_Init(void)
     comm_monitorFloat("pid_error [deg]",        (float32_t*)&pid_error,         READONLY);
     comm_monitorFloat("pid_torque [N.m]",       (float32_t*)&pid_torque_output, READONLY);
     comm_monitorFloat("pid_meas_angle [deg]",   (float32_t*)&pid_measured_angle,READONLY);
+
+    // --- Friction & gravity compensation ---
+    // Enable flags (quick ON/OFF from the remote interface)
+    comm_monitorUint32("comp_dry_enabled",     (uint32_t*)&comp_dry_enabled,     READWRITE);
+    comm_monitorUint32("comp_viscous_enabled", (uint32_t*)&comp_viscous_enabled, READWRITE);
+    comm_monitorUint32("comp_gravity_enabled", (uint32_t*)&comp_gravity_enabled, READWRITE);
+
+    // Tunable gains
+    comm_monitorFloat("comp_Fc [N.m]",         (float32_t*)&comp_Fc,            READWRITE);
+    comm_monitorFloat("comp_b [N.m.s/deg]",    (float32_t*)&comp_b,             READWRITE);
+    comm_monitorFloat("comp_mgl [N.m]",        (float32_t*)&comp_mgl,           READWRITE);
+    comm_monitorFloat("comp_vel_deadband [d/s]",(float32_t*)&comp_vel_deadband, READWRITE);
+
+    // Diagnostics
+    comm_monitorFloat("comp_torque_total [N.m]",(float32_t*)&comp_torque_total, READONLY);
+
+//    // mesure du frottement
+//    comm_monitorUint32("stiction_mode",  (uint32_t*)&stiction_mode,  READWRITE);
+//    comm_monitorFloat("stiction_step",  (float32_t*)&stiction_step,  READWRITE);
+//    comm_monitorFloat("stiction_found", (float32_t*)&stiction_found, READONLY);
+//    comm_monitorFloat("vel_threshold",  (float32_t*)&vel_threshold,  READWRITE);
 }
 
 /**
@@ -167,6 +232,31 @@ void hapt_Update(void)
     // Get the encoder position.
     motorShaftAngle        = enc_GetPosition();
     hapt_encoderPaddleAngle = motorShaftAngle / REDUCTION_RATIO;
+
+    // -----------------------------------------------------------------------
+    // Velocity and acceleration estimation (unchanged from original)
+    // -----------------------------------------------------------------------
+    float32_t angle = hapt_encoderPaddleAngle;
+    // Uncomment the line below to use the Hall sensor instead:
+    // angle = relative_angle;
+
+    paddle_velocity_1 = (angle - prev_angle_1) / dt;
+    paddle_velocity_2 = (angle - prev_angle_2) / (2.0f * dt);
+
+    paddle_acc_1 = (paddle_velocity_1 - prev_velocity_1) / dt;
+    paddle_acc_2 = (paddle_velocity_1 - prev_velocity_2) / (2.0f * dt);
+
+    prev_angle_2    = prev_angle_1;
+    prev_angle_1    = angle;
+    prev_velocity_2 = prev_velocity_1;
+    prev_velocity_1 = paddle_velocity_1;
+
+    // Velocity and acceleration low-pass filtering.
+    float32_t alpha = dt / (tao + dt);
+    filtred_vel  = alpha * paddle_velocity_1 + (1.0f - alpha) * prev_fil_vel;
+    prev_fil_vel = filtred_vel;
+    filtred_acc  = alpha * paddle_acc_1 + (1.0f - alpha) * prev_fil_acc;
+    prev_fil_acc = filtred_acc;
 
     // -----------------------------------------------------------------------
     // PID Position Controller
@@ -222,32 +312,73 @@ void hapt_Update(void)
         // hapt_motorTorque is left under manual control from the PC interface.
     }
 
+    // -----------------------------------------------------------------------
+	// dry friction estimation
+    // -----------------------------------------------------------------------
+    if (stiction_mode != 0 && !pid_enabled) {
+        stict_hold++;
+        if (stict_hold >= 10) {         // wait ~3.5 ms between steps
+            stict_hold = 0;
+            float32_t dir = (stiction_mode == 1) ? 1.0f : -1.0f;
+
+            // Movement detected? → record, reset
+            if (fabsf(filtred_vel) > vel_threshold) {
+                stiction_found = stict_torque;
+                stict_torque   = 0.0f;
+                stiction_mode  = 0;     // stop — operator logs value & reruns
+                hapt_motorTorque = 0.0f;
+            } else {
+                // Ramp torque up
+                stict_torque += dir * stiction_step;
+                hapt_motorTorque = stict_torque;
+            }
+        }
+    }
+
+
+    // -----------------------------------------------------------------------
+	// Friction and gravity compensation
+    // -----------------------------------------------------------------------
+    float32_t tau_comp = 0.0f;
+
+    // 1. Dry friction compensation
+    //    Uses the low-pass filtered velocity to avoid sign chatter from noise.
+    if (comp_dry_enabled)
+    {
+        if (filtred_vel > comp_vel_deadband)
+        {
+            tau_comp += comp_Fc;          // moving in positive direction
+        }
+        else if (filtred_vel < -comp_vel_deadband)
+        {
+            tau_comp -= comp_Fc;          // moving in negative direction
+        }
+        // Inside the dead-band: no dry compensation (paddle nearly stationary)
+    }
+
+    // 2. Viscous friction compensation
+    //    τ_visc = b * ω  — again uses the filtered velocity.
+    if (comp_viscous_enabled)
+    {
+        tau_comp += comp_b * filtred_vel;  // ici on peut peut-être mettre un filtre moins restrictif
+    }
+
+    // 3. Gravity compensation
+    //    τ_grav = m*g*L * sin(θ)
+    //    A positive paddle angle (forward tilt) creates a restoring gravity
+    //    torque that the motor must counteract.
+    if (comp_gravity_enabled)
+    {
+        float32_t theta_rad = hapt_encoderPaddleAngle * DEG2RAD;
+        tau_comp += comp_mgl * sinf(theta_rad);
+    }
+
+    // Record diagnostic and apply
+    comp_torque_total = tau_comp;
+    hapt_motorTorque += tau_comp;
+
+
     // Apply the motor torque (PID output or manual value when disabled).
     torq_SetTorque(hapt_motorTorque);
-
-    // -----------------------------------------------------------------------
-    // Velocity and acceleration estimation (unchanged from original)
-    // -----------------------------------------------------------------------
-    float32_t angle = hapt_encoderPaddleAngle;
-    // Uncomment the line below to use the Hall sensor instead:
-    // angle = relative_angle;
-
-    paddle_velocity_1 = (angle - prev_angle_1) / dt;
-    paddle_velocity_2 = (angle - prev_angle_2) / (2.0f * dt);
-
-    paddle_acc_1 = (paddle_velocity_1 - prev_velocity_1) / dt;
-    paddle_acc_2 = (paddle_velocity_1 - prev_velocity_2) / (2.0f * dt);
-
-    prev_angle_2    = prev_angle_1;
-    prev_angle_1    = angle;
-    prev_velocity_2 = prev_velocity_1;
-    prev_velocity_1 = paddle_velocity_1;
-
-    // Velocity and acceleration low-pass filtering.
-    float32_t alpha = dt / (tao + dt);
-    filtred_vel  = alpha * paddle_velocity_1 + (1.0f - alpha) * prev_fil_vel;
-    prev_fil_vel = filtred_vel;
-    filtred_acc  = alpha * paddle_acc_1 + (1.0f - alpha) * prev_fil_acc;
-    prev_fil_acc = filtred_acc;
 }
 

@@ -43,8 +43,8 @@ __MWOPC_PART_BEGIN__ /metadata/coreProperties.xml
   <dcterms:created xsi:type="dcterms:W3CDTF">2011-10-31T12:48:05Z</dcterms:created>
   <dc:creator>jemetzge</dc:creator>
   <cp:lastModifiedBy>tk</cp:lastModifiedBy>
-  <dcterms:modified xsi:type="dcterms:W3CDTF">2026-03-25T18:57:34Z</dcterms:modified>
-  <cp:revision>18.24</cp:revision>
+  <dcterms:modified xsi:type="dcterms:W3CDTF">2026-04-01T10:08:19Z</dcterms:modified>
+  <cp:revision>18.27</cp:revision>
   <cp:version>R2025a</cp:version>
 </cp:coreProperties>
 
@@ -115,7 +115,7 @@ __MWOPC_PART_BEGIN__ /simulink/blockdiagram.xml
     <ConfigManagerSettings>
       <P Name="ModifiedByFormat">%&lt;Auto&gt;</P>
       <P Name="ModifiedDateFormat">%&lt;Auto&gt;</P>
-      <P Name="ModelVersionFormat">%&lt;AutoIncrement:18.24&gt;</P>
+      <P Name="ModelVersionFormat">%&lt;AutoIncrement:18.27&gt;</P>
     </ConfigManagerSettings>
     <EditorSettings>
       <P Name="LibraryLinkDisplay">none</P>
@@ -163,7 +163,7 @@ __MWOPC_PART_BEGIN__ /simulink/configSet0.xml
     <Array PropName="Components" Type="Simulink.ConfigComponent" Dimension="9*1">
       <Object ObjectID="2" ClassName="Simulink.SolverCC">
         <P Name="StartTime" Class="char">0.0</P>
-        <P Name="StopTime" Class="char">50</P>
+        <P Name="StopTime" Class="char">10</P>
         <P Name="AbsTol" Class="char">auto</P>
         <P Name="AutoScaleAbsTol" Class="char">on</P>
         <P Name="FixedStep" Class="char">0.0001</P>
@@ -1095,7 +1095,7 @@ __MWOPC_PART_BEGIN__ /simulink/systems/system_159.xml
 <?xml version="1.0" encoding="utf-8"?>
 <System>
   <P Name="Location">[71, 46, 1452, 923]</P>
-  <P Name="ZoomFactor">60</P>
+  <P Name="ZoomFactor">126</P>
   <Block BlockType="Inport" Name="torque_command" SID="160">
     <P Name="Position">[20, 123, 50, 137]</P>
     <P Name="ZOrder">381</P>
@@ -1119,6 +1119,12 @@ __MWOPC_PART_BEGIN__ /simulink/systems/system_159.xml
     <P Name="IconShape">rectangular</P>
     <P Name="Inputs">+-</P>
   </Block>
+  <Block BlockType="Sum" Name="Add2" SID="179">
+    <PortCounts in="2" out="1"/>
+    <P Name="Position">[815, 397, 845, 428]</P>
+    <P Name="ZOrder">384</P>
+    <P Name="IconShape">rectangular</P>
+  </Block>
   <Block BlockType="Clock" Name="Clock" SID="31">
     <P Name="Position">[110, 25, 130, 45]</P>
     <P Name="ZOrder">-5</P>
@@ -1131,6 +1137,11 @@ __MWOPC_PART_BEGIN__ /simulink/systems/system_159.xml
   <Block BlockType="Constant" Name="Constant1" SID="119">
     <P Name="Position">[25, 165, 55, 195]</P>
     <P Name="ZOrder">343</P>
+  </Block>
+  <Block BlockType="Constant" Name="Constant2" SID="178">
+    <P Name="Position">[765, 390, 795, 420]</P>
+    <P Name="ZOrder">383</P>
+    <P Name="Value">0.02</P>
   </Block>
   <Block BlockType="Gain" Name="Equivalent inertia" SID="14">
     <P Name="Position">[920, 313, 985, 347]</P>
@@ -1591,15 +1602,26 @@ to Degrees</P>
     </Branch>
   </Line>
   <Line>
-    <P Name="ZOrder">536</P>
+    <P Name="ZOrder">588</P>
     <P Name="Src">15#out:1</P>
-    <P Name="Points">[-97, 0; 0, -95]</P>
-    <P Name="Dst">7#in:4</P>
+    <P Name="Points">[-105, 0]</P>
+    <P Name="Dst">179#in:2</P>
   </Line>
   <Line>
     <P Name="ZOrder">7</P>
     <P Name="Src">20#out:1</P>
     <P Name="Dst">19#in:1</P>
+  </Line>
+  <Line>
+    <P Name="ZOrder">589</P>
+    <P Name="Src">179#out:1</P>
+    <P Name="Points">[12, 0; 0, -40; -54, 0; 0, -25]</P>
+    <P Name="Dst">7#in:4</P>
+  </Line>
+  <Line>
+    <P Name="ZOrder">590</P>
+    <P Name="Src">178#out:1</P>
+    <P Name="Dst">179#in:1</P>
   </Line>
 </System>
 
@@ -1628,7 +1650,7 @@ __MWOPC_PART_BEGIN__ /simulink/systems/system_174.xml
   <Block BlockType="Gain" Name="I" SID="169">
     <P Name="Position">[80, 160, 175, 190]</P>
     <P Name="ZOrder">389</P>
-    <P Name="Gain">0.001</P>
+    <P Name="Gain">0.005</P>
   </Block>
   <Block BlockType="Integrator" Name="Integrator" SID="171">
     <PortCounts in="1" out="1"/>
@@ -1638,7 +1660,7 @@ __MWOPC_PART_BEGIN__ /simulink/systems/system_174.xml
   <Block BlockType="Gain" Name="K" SID="167">
     <P Name="Position">[80, 20, 175, 50]</P>
     <P Name="ZOrder">387</P>
-    <P Name="Gain">0.001</P>
+    <P Name="Gain">0.005</P>
   </Block>
   <Block BlockType="TransferFcn" Name="Used as derivate + filtering" SID="173">
     <P Name="Position">[225, 87, 315, 123]</P>
@@ -1718,7 +1740,7 @@ __MWOPC_PART_BEGIN__ /simulink/systems/system_root.xml
   <P Name="Location">[71, 46, 1452, 923]</P>
   <P Name="ZoomFactor">150</P>
   <P Name="ReportName">simulink-default.rpt</P>
-  <P Name="SIDHighWatermark">177</P>
+  <P Name="SIDHighWatermark">179</P>
   <Block BlockType="Sum" Name="Add" SID="165">
     <PortCounts in="2" out="1"/>
     <P Name="Position">[130, 237, 160, 268]</P>
@@ -2012,22 +2034,22 @@ __MWOPC_PART_BEGIN__ /simulink/windowsInfo.xml
         <Object ObjectID="6">
           <P Name="IsActive" Class="logical">0</P>
           <P Name="IsTabbed" Class="logical">0</P>
-          <P Name="ViewObjType" Class="char">SimulinkTopLevel</P>
-          <P Name="LoadSaveID" Class="char">0</P>
+          <P Name="ViewObjType" Class="char">SimulinkSubsys</P>
+          <P Name="LoadSaveID" Class="char">159</P>
           <P Name="Extents" Class="double">[1343.0, 643.0]</P>
-          <P Name="ZoomFactor" Class="double">1.5</P>
-          <P Name="Offset" Class="double">[-16.448475177311117, 29.828045132325343]</P>
-          <P Name="SceneRectInView" Class="double">[-16.448475177311117, 29.828045132325343, 895.33333333333337, 428.66666666666669]</P>
+          <P Name="ZoomFactor" Class="double">1.2570791287106644</P>
+          <P Name="Offset" Class="double">[293.73756398223122, 82.16276134229193]</P>
+          <P Name="SceneRectInView" Class="double">[293.73756398223122, 82.16276134229193, 1068.3496124682788, 511.50320239546039]</P>
         </Object>
         <Object ObjectID="7">
           <P Name="IsActive" Class="logical">0</P>
           <P Name="IsTabbed" Class="logical">0</P>
-          <P Name="ViewObjType" Class="char">SimulinkSubsys</P>
-          <P Name="LoadSaveID" Class="char">159</P>
+          <P Name="ViewObjType" Class="char">SimulinkTopLevel</P>
+          <P Name="LoadSaveID" Class="char">0</P>
           <P Name="Extents" Class="double">[1343.0, 643.0]</P>
-          <P Name="ZoomFactor" Class="double">0.6</P>
-          <P Name="Offset" Class="double">[-389.17183181861571, -277.02104206119304]</P>
-          <P Name="SceneRectInView" Class="double">[-389.17183181861571, -277.02104206119304, 2238.3333333333335, 1071.6666666666667]</P>
+          <P Name="ZoomFactor" Class="double">1.5</P>
+          <P Name="Offset" Class="double">[-16.448475177311138, 29.828045132325343]</P>
+          <P Name="SceneRectInView" Class="double">[-16.448475177311138, 29.828045132325343, 895.33333333333337, 428.66666666666669]</P>
         </Object>
       </Array>
       <Array PropName="DockComponentsInfo" Type="Simulink.DockComponentInfo" Dimension="1*2">
