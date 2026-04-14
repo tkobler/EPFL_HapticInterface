@@ -26,12 +26,10 @@
 #define DEFAULT_HAPTIC_CONTROLLER_PERIOD 350 // Default control loop period [us].
 
 // Physical limits of the paddle range [deg].
-// Adjust these values to match the actual hardware range.
 #define PADDLE_ANGLE_MIN   -45.0f
 #define PADDLE_ANGLE_MAX    45.0f
 
 // Torque output saturation limit [N.m].
-// Prevents the PID from commanding unsafe torques.
 #define PID_TORQUE_SAT      0.5f
 
 volatile uint32_t  hapt_timestamp;          // Time base of the controller [us].
@@ -44,12 +42,12 @@ volatile float32_t zero_angle = 0.0f;
 volatile float32_t relative_angle;
 
 // -----------------------------------------------------------------------
-// Velocity and acceleration estimation (unchanged from original)
+// Velocity and acceleration estimation
 // -----------------------------------------------------------------------
-volatile float32_t paddle_velocity_1; // velocity with 1 sample differentiation
-volatile float32_t paddle_velocity_2; // velocity with 2 samples differentiation
-volatile float32_t paddle_acc_1;      // acceleration with 1 sample differentiation
-volatile float32_t paddle_acc_2;      // acceleration with 2 samples differentiation
+volatile float32_t paddle_velocity_1;
+volatile float32_t paddle_velocity_2;
+volatile float32_t paddle_acc_1;
+volatile float32_t paddle_acc_2;
 
 float32_t prev_angle_1   = 0.0f;
 float32_t prev_angle_2   = 0.0f;
@@ -66,88 +64,89 @@ float32_t comp_prev_fil_vel_dry   = 0.0f;
 float32_t comp_filtred_vel_visc    = 0.0f;
 float32_t comp_prev_fil_vel_visc   = 0.0f;
 
-float32_t tao = 1.0f / (200.0f * 2.0f * 3.14159265f); // Velocity/accel filter time constant [s].
-
 // ---------------------------------------------------------------------------
 // PID Position Controller
 // ---------------------------------------------------------------------------
-
-// Enable flag: 0 = disabled (default at startup), 1 = enabled.
 volatile uint32_t  pid_enabled         = 0;
-
-// Sensor selection: 0 = incremental encoder (default), 1 = Hall-effect sensor.
 volatile uint32_t  pid_use_hall        = 0;
-
-// Target position set from the remote-control interface [deg].
-// Clamped to [PADDLE_ANGLE_MIN, PADDLE_ANGLE_MAX] on write via hapt_Update.
 volatile float32_t pid_target_angle    = 0.0f;
+volatile float32_t pid_Kp              = 0.001f;
+volatile float32_t pid_Ki              = 0.001f;
+volatile float32_t pid_Kd              = 0.0005f;
+volatile float32_t pid_filter_tao      = 1.0f / (50.0f * 2.0f * 3.14159265f);
+volatile float32_t pid_error           = 0.0f;
+volatile float32_t pid_torque_output   = 0.0f;
+volatile float32_t pid_measured_angle  = 0.0f;
 
-// Parallel PID gains (tunable from the remote-control interface).
-volatile float32_t pid_Kp              = 0.001;  // Proportional gain [N.m/deg]
-volatile float32_t pid_Ki              = 0.001;  // Integral gain     [N.m/(deg.s)]
-volatile float32_t pid_Kd              = 0.0005f; // Derivative gain   [N.m.s/deg]
-
-// Input (position) low-pass filter time constant for the PID [s].
-// A dedicated filter on the measured position prevents the derivative
-// term from amplifying sensor noise.
-volatile float32_t pid_filter_tao      = 1.0f / (50.0f * 2.0f * 3.14159265f); // 50 Hz cut-off
-
-// Read-only diagnostics exposed to the remote-control interface.
-volatile float32_t pid_error           = 0.0f;  // Current position error [deg].
-volatile float32_t pid_torque_output   = 0.0f;  // Torque commanded by PID [N.m].
-volatile float32_t pid_measured_angle  = 0.0f;  // Filtered angle used by PID [deg].
-
-// Internal PID state (not exposed).
 static float32_t pid_integral          = 0.0f;
 static float32_t pid_prev_error        = 0.0f;
-static float32_t pid_filtered_pos      = 0.0f;  // Low-pass filtered measured position [deg].
+static float32_t pid_filtered_pos      = 0.0f;
 
 void hapt_Update(void);
 
 // -----------------------------------------------------------------------
-// dry friction estimation
+// Dry friction estimation
 // -----------------------------------------------------------------------
-volatile uint32_t stiction_mode  = 0;   // 0=off, 1=pos, 2=neg
-volatile float32_t stiction_step  = 0.001f; // torque increment [N.m]
-volatile float32_t stiction_found = 0.0f;   // last measured τ_s
-volatile float32_t vel_threshold  = 5.0f;   // movement threshold [deg/s]
+volatile uint32_t stiction_mode  = 0;
+volatile float32_t stiction_step  = 0.001f;
+volatile float32_t stiction_found = 0.0f;
+volatile float32_t vel_threshold  = 5.0f;
 
 static float32_t stict_torque = 0.0f;
-static uint32_t  stict_hold   = 0;    // hold counter before increment
+static uint32_t  stict_hold   = 0;
 
 // -----------------------------------------------------------------------
 // Friction and gravity compensation
 // -----------------------------------------------------------------------
-#define PADDLE_MGL_DEFAULT  0.01896f   // 0.077*9.81*0.0251 [N.m]  m * g * L
+#define PADDLE_MGL_DEFAULT  0.01896f
 #define PI_F                3.14159265f
 #define DEG2RAD             (PI_F / 180.0f)
 
-// --- Enable flags (0 = OFF, 1 = ON) — togglable from the remote interface ---
-volatile uint32_t comp_dry_enabled      = 0;  // Dry (Coulomb) friction compensation
-volatile uint32_t comp_viscous_enabled  = 0;  // Viscous friction compensation
-volatile uint32_t comp_gravity_enabled  = 0;  // Gravity compensation
+volatile uint32_t comp_dry_enabled      = 1;
+volatile uint32_t comp_viscous_enabled  = 1;
+volatile uint32_t comp_gravity_enabled  = 1;
 
-// --- Tunable parameters ---
-// filter
-float32_t tao_dry = 1.0f / (100.0f * 2.0f * 3.14159265f); // Velocity/accel filter time constant [s].
-float32_t tao_visc = 1.0f / (200.0f * 2.0f * 3.14159265f); // Velocity/accel filter time constant [s].
-// Coulomb friction coefficient [N.m]: torque to overcome static/kinetic friction.
-volatile float32_t comp_Fc_ccw             = 0.001f;
-volatile float32_t comp_Fc_cw             = 0.0006f;
+float32_t tao_dry  = 1.0f / (100.0f * 2.0f * 3.14159265f);
+float32_t tao_visc = 1.0f / (200.0f * 2.0f * 3.14159265f);
 
-// Viscous damping coefficient [N.m.s/deg]: b such that τ_visc = b * ω.
+// NOTE: tao for the general velocity/accel filter is now derived from
+// wall_filter_fc each control cycle so it tracks changes made via the
+// remote interface in real time.
+float32_t tao; // updated every cycle from wall_filter_fc
+
+volatile float32_t comp_Fc_ccw         = 0.0009f;
+volatile float32_t comp_Fc_cw          = 0.0006f;
 volatile float32_t comp_b              = 0.0000029943f;
-
-// Gravity amplitude m*g*L [N.m].  Default computed from hardware specs.
 volatile float32_t comp_mgl            = PADDLE_MGL_DEFAULT;
-
-// Velocity dead-band for dry friction compensation [deg/s].
-// Below this threshold the velocity sign is unreliable; dry compensation
-// is suppressed to prevent chattering / torque reversal near standstill.
 volatile float32_t comp_vel_deadband   = 3.0f;
-
-// Read-only diagnostic: total compensation torque applied this cycle [N.m].
 volatile float32_t comp_torque_total   = 0.0f;
+
+// ---------------------------------------------------------------------------
+// Virtual Wall Parameters
+// ---------------------------------------------------------------------------
+// Wall trigger angle (symmetric) [deg].
+#define WALL_ANGLE          15.0f
+
+// Virtual spring stiffness K [N.m/deg]: restoring torque per degree of penetration.
+// Tunable from the remote-control interface.
+volatile float32_t wall_K = 0.005f;
+
+// Virtual damping coefficient B [N.m/(deg/s)]: dissipative torque proportional
+// to the penetration velocity. Tunable from the remote-control interface.
+volatile float32_t wall_B = 0.0001f;
+
+// Wall filter cut-off frequency [Hz]: shared first-order IIR applied to both
+// position and velocity before the wall law, to suppress quantisation noise.
+// Tunable from the remote-control interface.
+volatile float32_t wall_filter_fc = 200.0f;   // [Hz] — initial value
+
+// Read-only diagnostics.
+volatile float32_t wall_torque      = 0.0f;   // Torque produced by the wall this cycle [N.m].
+volatile float32_t wall_penetration = 0.0f;   // Current wall penetration depth [deg] (≥ 0).
+
+// Internal wall filter state.
+static float32_t wall_filtered_angle = 0.0f;
+static float32_t wall_filtered_vel   = 0.0f;
 
 
 /**
@@ -158,10 +157,17 @@ void hapt_Init(void)
     hapt_timestamp  = 0;
     hapt_motorTorque = 0.0f;
 
+    // Initialise tao from the default wall_filter_fc.
+    tao = 1.0f / (wall_filter_fc * 2.0f * PI_F);
+
     // Reset PID internal state.
     pid_integral     = 0.0f;
     pid_prev_error   = 0.0f;
     pid_filtered_pos = 0.0f;
+
+    // Reset wall filter state.
+    wall_filtered_angle = 0.0f;
+    wall_filtered_vel   = 0.0f;
 
     // Make the timers call the update function periodically.
     cbt_SetHapticControllerTimer(hapt_Update, DEFAULT_HAPTIC_CONTROLLER_PERIOD);
@@ -185,7 +191,6 @@ void hapt_Init(void)
     comm_monitorFloat("filtred acceleration",  (float32_t*)&filtred_acc,       READONLY);
 
     // --- PID controller variables ---
-    // Control / configuration (read-write from the PC interface).
     comm_monitorUint32("pid_enabled",           (uint32_t*)&pid_enabled,       READWRITE);
     comm_monitorUint32("pid_use_hall",          (uint32_t*)&pid_use_hall,      READWRITE);
     comm_monitorFloat("pid_target_angle [deg]", (float32_t*)&pid_target_angle, READWRITE);
@@ -193,34 +198,38 @@ void hapt_Init(void)
     comm_monitorFloat("pid_Ki",                 (float32_t*)&pid_Ki,           READWRITE);
     comm_monitorFloat("pid_Kd",                 (float32_t*)&pid_Kd,           READWRITE);
     comm_monitorFloat("pid_filter_tao [s]",     (float32_t*)&pid_filter_tao,   READWRITE);
-
-    // Diagnostics (read-only).
     comm_monitorFloat("pid_error [deg]",        (float32_t*)&pid_error,         READONLY);
     comm_monitorFloat("pid_torque [N.m]",       (float32_t*)&pid_torque_output, READONLY);
     comm_monitorFloat("pid_meas_angle [deg]",   (float32_t*)&pid_measured_angle,READONLY);
 
     // --- Friction & gravity compensation ---
-    // Enable flags (quick ON/OFF from the remote interface)
     comm_monitorUint32("comp_dry_enabled",     (uint32_t*)&comp_dry_enabled,     READWRITE);
     comm_monitorUint32("comp_viscous_enabled", (uint32_t*)&comp_viscous_enabled, READWRITE);
     comm_monitorUint32("comp_gravity_enabled", (uint32_t*)&comp_gravity_enabled, READWRITE);
+    comm_monitorFloat("comp_Fc_cw [N.m]",      (float32_t*)&comp_Fc_cw,          READWRITE);
+    comm_monitorFloat("comp_Fc_ccw [N.m]",     (float32_t*)&comp_Fc_ccw,         READWRITE);
+    comm_monitorFloat("comp_b [N.m.s/deg]",    (float32_t*)&comp_b,              READWRITE);
+    comm_monitorFloat("comp_mgl [N.m]",        (float32_t*)&comp_mgl,            READWRITE);
+    comm_monitorFloat("comp_vel_deadband [d/s]",(float32_t*)&comp_vel_deadband,  READWRITE);
+    comm_monitorFloat("comp_velocityy",        (float32_t*)&comp_filtred_vel_visc,READONLY);
+    comm_monitorFloat("comp_torque_total [N.m]",(float32_t*)&comp_torque_total,  READONLY);
 
-    // Tunable gains
-    comm_monitorFloat("comp_Fc_cw [N.m]",         (float32_t*)&comp_Fc_cw,            READWRITE);
-    comm_monitorFloat("comp_Fc_ccw [N.m]",         (float32_t*)&comp_Fc_ccw,            READWRITE);
-    comm_monitorFloat("comp_b [N.m.s/deg]",    (float32_t*)&comp_b,             READWRITE);
-    comm_monitorFloat("comp_mgl [N.m]",        (float32_t*)&comp_mgl,           READWRITE);
-    comm_monitorFloat("comp_vel_deadband [d/s]",(float32_t*)&comp_vel_deadband, READWRITE);
+    // -----------------------------------------------------------------------
+    // Virtual Wall — tunable parameters (remote-control interface)
+    // -----------------------------------------------------------------------
+    // Spring stiffness: higher = stiffer wall, but risks instability.
+    comm_monitorFloat("wall_K [N.m/deg]",      (float32_t*)&wall_K,           READWRITE);
 
-    // Diagnostics
-    comm_monitorFloat("comp_velocityy",           (float32_t*)&comp_filtred_vel_visc, READONLY);
-    comm_monitorFloat("comp_torque_total [N.m]",(float32_t*)&comp_torque_total, READONLY);
+    // Damping factor: adds energy dissipation to stabilise high-K walls.
+    comm_monitorFloat("wall_B [N.m/(deg/s)]",  (float32_t*)&wall_B,           READWRITE);
 
-//    // mesure du frottement
-//    comm_monitorUint32("stiction_mode",  (uint32_t*)&stiction_mode,  READWRITE);
-//    comm_monitorFloat("stiction_step",  (float32_t*)&stiction_step,  READWRITE);
-//    comm_monitorFloat("stiction_found", (float32_t*)&stiction_found, READONLY);
-//    comm_monitorFloat("vel_threshold",  (float32_t*)&vel_threshold,  READWRITE);
+    // Filter cut-off frequency: lower = smoother velocity, more phase lag;
+    // higher = more responsive, but noisier.
+    comm_monitorFloat("wall_filter_fc [Hz]",   (float32_t*)&wall_filter_fc,   READWRITE);
+
+    // Read-only diagnostics.
+    comm_monitorFloat("wall_torque [N.m]",     (float32_t*)&wall_torque,      READONLY);
+    comm_monitorFloat("wall_penetration [deg]",(float32_t*)&wall_penetration, READONLY);
 }
 
 /**
@@ -228,10 +237,14 @@ void hapt_Init(void)
   */
 void hapt_Update(void)
 {
-    float32_t motorShaftAngle; // [deg].
+    float32_t motorShaftAngle;
 
     // Compute dt [s].
     float32_t dt = ((float32_t)cbt_GetHapticControllerPeriod()) / 1000000.0f;
+
+    // Recompute tao from the (possibly updated) wall_filter_fc each cycle.
+    // This makes the filter cut-off immediately responsive to remote changes.
+    tao = 1.0f / (wall_filter_fc * 2.0f * PI_F);
 
     // Increment the timestamp.
     hapt_timestamp += cbt_GetHapticControllerPeriod();
@@ -241,15 +254,13 @@ void hapt_Update(void)
     relative_angle   = hapt_hallVoltage * 48.7132f - 96.7068f - zero_angle;
 
     // Get the encoder position.
-    motorShaftAngle        = enc_GetPosition();
+    motorShaftAngle         = enc_GetPosition();
     hapt_encoderPaddleAngle = motorShaftAngle / REDUCTION_RATIO;
 
     // -----------------------------------------------------------------------
-    // Velocity and acceleration estimation (unchanged from original)
+    // Velocity and acceleration estimation
     // -----------------------------------------------------------------------
     float32_t angle = hapt_encoderPaddleAngle;
-    // Uncomment the line below to use the Hall sensor instead:
-    // angle = relative_angle;
 
     paddle_velocity_1 = (angle - prev_angle_1) / dt;
     paddle_velocity_2 = (angle - prev_angle_2) / (2.0f * dt);
@@ -262,8 +273,8 @@ void hapt_Update(void)
     prev_velocity_2 = prev_velocity_1;
     prev_velocity_1 = paddle_velocity_1;
 
-    // Velocity and acceleration low-pass filtering.
-    float32_t alpha = dt / (tao + dt);
+    // General velocity/acceleration low-pass filter (cut-off = wall_filter_fc).
+    float32_t alpha  = dt / (tao + dt);
     filtred_vel  = alpha * paddle_velocity_1 + (1.0f - alpha) * prev_fil_vel;
     prev_fil_vel = filtred_vel;
     filtred_acc  = alpha * paddle_acc_1 + (1.0f - alpha) * prev_fil_acc;
@@ -272,41 +283,29 @@ void hapt_Update(void)
     // -----------------------------------------------------------------------
     // PID Position Controller
     // -----------------------------------------------------------------------
-
-    // Clamp the target angle to the physically feasible paddle range.
     if (pid_target_angle < PADDLE_ANGLE_MIN) pid_target_angle = PADDLE_ANGLE_MIN;
     if (pid_target_angle > PADDLE_ANGLE_MAX) pid_target_angle = PADDLE_ANGLE_MAX;
 
     if (pid_enabled)
     {
-        // 1. Select the raw measured position based on sensor choice.
         float32_t raw_pos = pid_use_hall ? relative_angle : hapt_encoderPaddleAngle;
 
-        // 2. Low-pass filter the measured position to attenuate noise
-        //    before it reaches the derivative term.
-        //    First-order IIR: y[n] = alpha * x[n] + (1 - alpha) * y[n-1]
         float32_t alpha_pid = dt / (pid_filter_tao + dt);
         pid_filtered_pos    = alpha_pid * raw_pos + (1.0f - alpha_pid) * pid_filtered_pos;
-        pid_measured_angle  = pid_filtered_pos; // expose to remote interface
+        pid_measured_angle  = pid_filtered_pos;
 
-        // 3. Compute position error [deg].
         float32_t error = pid_target_angle - pid_filtered_pos;
         pid_error = error;
 
-        // 4. Integrate the error (with simple anti-windup via torque saturation
-        //    — accumulation is only applied when not saturating).
         pid_integral += error * dt;
 
-        // 5. Differentiate the error.
         float32_t error_derivative = (error - pid_prev_error) / dt;
         pid_prev_error = error;
 
-        // 6. Parallel PID sum.
         float32_t torque_cmd = pid_Kp * error
                              + pid_Ki * pid_integral
                              + pid_Kd * error_derivative;
 
-        // 7. Saturate the output torque.
         if (torque_cmd >  PID_TORQUE_SAT) torque_cmd =  PID_TORQUE_SAT;
         if (torque_cmd < -PID_TORQUE_SAT) torque_cmd = -PID_TORQUE_SAT;
 
@@ -315,88 +314,140 @@ void hapt_Update(void)
     }
     else
     {
-        // Controller disabled: reset integrator and derivative memory so
-        // there is no transient bump when re-enabling.
         pid_integral      = 0.0f;
         pid_prev_error    = 0.0f;
         pid_torque_output = 0.0f;
-        // hapt_motorTorque is left under manual control from the PC interface.
     }
 
     // -----------------------------------------------------------------------
-	// dry friction estimation
+    // Dry friction estimation
     // -----------------------------------------------------------------------
-    if (stiction_mode != 0 && !pid_enabled) {
+    if (stiction_mode != 0 && !pid_enabled)
+    {
         stict_hold++;
-        if (stict_hold >= 10) {         // wait ~3.5 ms between steps
+        if (stict_hold >= 10)
+        {
             stict_hold = 0;
             float32_t dir = (stiction_mode == 1) ? 1.0f : -1.0f;
 
-            // Movement detected? → record, reset
-            if (fabsf(filtred_vel) > vel_threshold) {
-                stiction_found = stict_torque;
-                stict_torque   = 0.0f;
-                stiction_mode  = 0;     // stop — operator logs value & reruns
+            if (fabsf(filtred_vel) > vel_threshold)
+            {
+                stiction_found   = stict_torque;
+                stict_torque     = 0.0f;
+                stiction_mode    = 0;
                 hapt_motorTorque = 0.0f;
-            } else {
-                // Ramp torque up
-                stict_torque += dir * stiction_step;
+            }
+            else
+            {
+                stict_torque    += dir * stiction_step;
                 hapt_motorTorque = stict_torque;
             }
         }
     }
 
-
     // -----------------------------------------------------------------------
-	// Friction and gravity compensation
+    // Friction and gravity compensation
     // -----------------------------------------------------------------------
     float32_t tau_comp = 0.0f;
-    hapt_motorTorque = 0.0f;
-    float32_t alpha_dry = dt / (tao_dry + dt);
+    hapt_motorTorque   = 0.0f;
+
+    float32_t alpha_dry  = dt / (tao_dry  + dt);
     float32_t alpha_visc = dt / (tao_visc + dt);
-	comp_filtred_vel_dry  = alpha_dry * paddle_velocity_1 + (1.0f - alpha_dry) * comp_prev_fil_vel_dry;
-	comp_prev_fil_vel_dry= comp_filtred_vel_dry;
-	comp_filtred_vel_visc  = alpha_visc * paddle_velocity_1 + (1.0f - alpha_visc) * comp_prev_fil_vel_visc;
-	comp_prev_fil_vel_visc = comp_filtred_vel_visc;
+
+    comp_filtred_vel_dry   = alpha_dry  * paddle_velocity_1 + (1.0f - alpha_dry)  * comp_prev_fil_vel_dry;
+    comp_prev_fil_vel_dry  = comp_filtred_vel_dry;
+    comp_filtred_vel_visc  = alpha_visc * paddle_velocity_1 + (1.0f - alpha_visc) * comp_prev_fil_vel_visc;
+    comp_prev_fil_vel_visc = comp_filtred_vel_visc;
 
     // 1. Dry friction compensation
-    //    Uses the low-pass filtered velocity to avoid sign chatter from noise.
     if (comp_dry_enabled)
     {
         if (comp_filtred_vel_dry > comp_vel_deadband)
-        {
-            tau_comp += comp_Fc_ccw;          // moving in positive direction
-        }
+            tau_comp += comp_Fc_ccw;
         else if (comp_filtred_vel_dry < -comp_vel_deadband)
-        {
-            tau_comp -= comp_Fc_cw;          // moving in negative direction
-        }
-        // Inside the dead-band: no dry compensation (paddle nearly stationary)
+            tau_comp -= comp_Fc_cw;
     }
 
     // 2. Viscous friction compensation
-    //    τ_visc = b * ω  — again uses the filtered velocity.
     if (comp_viscous_enabled)
     {
-        tau_comp += comp_b * comp_filtred_vel_visc/15;  // ici on peut peut-être mettre un filtre moins restrictif
+        tau_comp += comp_b * comp_filtred_vel_visc / 15.0f;
     }
 
-    // 3. Gravity compensation
-    //    τ_grav = m*g*L * sin(θ)
-    //    A positive paddle angle (forward tilt) creates a restoring gravity
-    //    torque that the motor must counteract.
+    // 3. Gravity compensation:  τ = m·g·L · sin(θ)
     if (comp_gravity_enabled)
     {
         float32_t theta_rad = hapt_encoderPaddleAngle * DEG2RAD;
-        tau_comp += comp_mgl * sin(theta_rad)/REDUCTION_RATIO;
+        tau_comp += comp_mgl * sinf(theta_rad) / REDUCTION_RATIO;
     }
 
-    // Record diagnostic and apply
     comp_torque_total = tau_comp;
     hapt_motorTorque += tau_comp;
 
+    // -----------------------------------------------------------------------
+    // Virtual Viscoelastic Walls at Φ_wall = ±15°
+    //
+    // Model:  τ_wall = −K · δ  −  B · δ̇
+    //
+    //   δ   = signed penetration beyond the wall boundary [deg]
+    //         δ > 0 when inside the positive wall (angle > +15°)
+    //         δ < 0 when inside the negative wall (angle < −15°)
+    //   δ̇   = filtered velocity [deg/s], used only when the paddle is
+    //         actively penetrating the wall (δ and δ̇ have the same sign)
+    //         to avoid the damper pulling the paddle deeper during rebound.
+    //
+    // The wall filter (shared cut-off wall_filter_fc) is applied to both
+    // the measured angle and the velocity estimate so that high-frequency
+    // quantisation noise does not create torque spikes at high K values.
+    // -----------------------------------------------------------------------
 
-    // Apply the motor torque (PID output or manual value when disabled).
+    // Update the wall's dedicated low-pass filters.
+    // alpha is already computed above from tao = 1/(wall_filter_fc · 2π).
+    wall_filtered_angle = alpha * hapt_encoderPaddleAngle
+                        + (1.0f - alpha) * wall_filtered_angle;
+    wall_filtered_vel   = alpha * paddle_velocity_1
+                        + (1.0f - alpha) * wall_filtered_vel;
+
+    float32_t tau_wall = 0.0f;
+
+    if (wall_filtered_angle > WALL_ANGLE)
+    {
+        // ---- Positive wall ----
+        float32_t delta = wall_filtered_angle - WALL_ANGLE;   // penetration depth [deg], > 0
+        wall_penetration = delta;
+
+        // Spring term: always pushes back.
+        tau_wall = -wall_K * delta;
+
+        // Damper term: only when penetrating (positive velocity while in positive wall).
+        // During rebound (negative velocity) the damper is inactive so it does not
+        // resist the natural exit, which would destabilise the interaction.
+        if (wall_filtered_vel > 0.0f)
+            tau_wall -= wall_B * wall_filtered_vel;
+    }
+    else if (wall_filtered_angle < -WALL_ANGLE)
+    {
+        // ---- Negative wall ----
+        float32_t delta = wall_filtered_angle + WALL_ANGLE;   // penetration depth [deg], < 0
+        wall_penetration = -delta;                             // report as positive magnitude
+
+        // Spring term: always pushes back.
+        tau_wall = -wall_K * delta;
+
+        // Damper term: only when penetrating (negative velocity in negative wall).
+        if (wall_filtered_vel < 0.0f)
+            tau_wall -= wall_B * wall_filtered_vel;
+    }
+    else
+    {
+        // Paddle is between the two walls — no wall torque.
+        wall_penetration = 0.0f;
+    }
+
+    wall_torque = tau_wall;
+    hapt_motorTorque += tau_wall;
+
+    // Apply the final motor torque.
     torq_SetTorque(hapt_motorTorque);
 }
 
