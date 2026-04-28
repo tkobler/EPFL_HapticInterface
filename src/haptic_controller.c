@@ -22,6 +22,7 @@
 #include "drivers/callback_timers.h"
 #include "lib/utils.h"
 #include "torque_regulator.h"
+#include "drivers/adc.h"
 
 #define DEFAULT_HAPTIC_CONTROLLER_PERIOD 350 // Default control loop period [us].
 
@@ -148,57 +149,19 @@ volatile float32_t wall_penetration = 0.0f;   // Current wall penetration depth 
 static float32_t wall_filtered_angle = 0.0f;
 static float32_t wall_filtered_vel   = 0.0f;
 
-// -----------------------------------------------------------------------
-// KB Plot Sweep
-// -----------------------------------------------------------------------
-#define KB_NUM_POINTS 10
 
-// Sweep control – all READWRITE from the remote interface.
-//
-//   kb_sweep_enabled    : write 1 to start (or restart) the sweep,
-//                         0 to abort at any time.
-//   kb_vibration_detect : write 1 the moment you feel sustained vibration;
-//                         the code records the current (B, K) pair, clears
-//                         this flag automatically, increments B, resets K
-//                         to 0 and starts the next ramp.
-//   kb_K_sweep_rate     : how fast K rises [N.m/deg per second].
-//                         Default 0.002 => ~0.1 N.m/deg in ~50 s at 350 us.
-//                         Increase if the sweep is too slow for your patience.
-//   kb_B_start          : damping value used for the very first point.
-//   kb_B_step           : how much B is incremented after each recorded point.
-volatile uint32_t  kb_sweep_enabled    = 0;
-volatile uint32_t  kb_vibration_detect = 0;
-volatile float32_t kb_K_sweep_rate     = 0.002f;  // [N.m/deg/s]
-volatile float32_t kb_B_start          = 0.0f;    // [N.m/(deg/s)]
-volatile float32_t kb_B_step           = 0.0001f; // [N.m/(deg/s)]
+// ---------------------------------------------------------------------------
+// EMG
+// ---------------------------------------------------------------------------
+volatile float32_t emg_raw = 0;
 
-// Sweep diagnostics – READONLY.
-volatile uint32_t  kb_point_index      = 0;    // Points stored so far (0–10).
-volatile float32_t kb_K_current        = 0.0f; // K currently being swept [N.m/deg].
-volatile float32_t kb_B_current        = 0.0f; // B fixed for this sweep [N.m/(deg/s)].
+volatile float32_t mov_mean_length = 25;
 
-// Stored results: 10 K values and 10 B values – READONLY.
-volatile float32_t kb_K_results[KB_NUM_POINTS] = {0.0f};
-volatile float32_t kb_B_results[KB_NUM_POINTS] = {0.0f};
 
-// Experiment mode selector – READWRITE.
-//
-//   0 = user-controlled (no auto-configuration)
-//   1 = A : no velocity filter,  sampling period = 350 us
-//   2 = B : no velocity filter,  sampling period = 10 000 us (10 ms)
-//   3 = C : 50 Hz LP filter,     sampling period = 350 us
-//   4 = D : 50 Hz LP filter,     sampling period = 350 us,
-//           friction & gravity compensation DISABLED
-//
-// Writing a mode value configures wall_filter_fc, the timer period and
-// (for mode D) the compensation enable flags in a single step so you can
-// move between the four experimental conditions without manual tuning.
-volatile uint32_t  kb_experiment_mode  = 0;
 
-// Internal sweep tracking state.
-static uint32_t kb_sweep_was_enabled = 0;
-static uint32_t kb_prev_exp_mode     = 0;
-
+volatile float32_t tao_emg  = 1.0f / (100.0f * 2.0f * 3.14159265f);
+float32_t filtred_emg = 0;
+float32_t prev_fil_emg = 0;
 
 /**
   * @brief Initializes the haptic controller.
@@ -282,48 +245,9 @@ void hapt_Init(void)
     comm_monitorFloat("wall_torque [N.m]",     (float32_t*)&wall_torque,      READONLY);
     comm_monitorFloat("wall_penetration [deg]",(float32_t*)&wall_penetration, READONLY);
 
-    // -----------------------------------------------------------------------
-    // KB Plot Sweep – control, diagnostics and stored results
-    // -----------------------------------------------------------------------
-
-    // Sweep control.
-    comm_monitorUint32("kb_sweep_enabled",           (uint32_t*)&kb_sweep_enabled,    READWRITE);
-    comm_monitorUint32("kb_vibration_detect",        (uint32_t*)&kb_vibration_detect, READWRITE);
-    comm_monitorFloat("kb_K_sweep_rate [N.m/deg/s]", (float32_t*)&kb_K_sweep_rate,    READWRITE);
-    comm_monitorFloat("kb_B_start [N.m/(d/s)]",      (float32_t*)&kb_B_start,         READWRITE);
-    comm_monitorFloat("kb_B_step  [N.m/(d/s)]",      (float32_t*)&kb_B_step,          READWRITE);
-
-    // Sweep diagnostics.
-    comm_monitorUint32("kb_point_index",              (uint32_t*)&kb_point_index,      READONLY);
-    comm_monitorFloat("kb_K_current [N.m/deg]",       (float32_t*)&kb_K_current,       READONLY);
-    comm_monitorFloat("kb_B_current [N.m/(d/s)]",     (float32_t*)&kb_B_current,       READONLY);
-
-    // Stored K results (one per point, 0–9).
-    comm_monitorFloat("kb_K_result_0",  (float32_t*)&kb_K_results[0],  READONLY);
-    comm_monitorFloat("kb_K_result_1",  (float32_t*)&kb_K_results[1],  READONLY);
-    comm_monitorFloat("kb_K_result_2",  (float32_t*)&kb_K_results[2],  READONLY);
-    comm_monitorFloat("kb_K_result_3",  (float32_t*)&kb_K_results[3],  READONLY);
-    comm_monitorFloat("kb_K_result_4",  (float32_t*)&kb_K_results[4],  READONLY);
-    comm_monitorFloat("kb_K_result_5",  (float32_t*)&kb_K_results[5],  READONLY);
-    comm_monitorFloat("kb_K_result_6",  (float32_t*)&kb_K_results[6],  READONLY);
-    comm_monitorFloat("kb_K_result_7",  (float32_t*)&kb_K_results[7],  READONLY);
-    comm_monitorFloat("kb_K_result_8",  (float32_t*)&kb_K_results[8],  READONLY);
-    comm_monitorFloat("kb_K_result_9",  (float32_t*)&kb_K_results[9],  READONLY);
-
-    // Stored B results (one per point, 0–9).
-    comm_monitorFloat("kb_B_result_0",  (float32_t*)&kb_B_results[0],  READONLY);
-    comm_monitorFloat("kb_B_result_1",  (float32_t*)&kb_B_results[1],  READONLY);
-    comm_monitorFloat("kb_B_result_2",  (float32_t*)&kb_B_results[2],  READONLY);
-    comm_monitorFloat("kb_B_result_3",  (float32_t*)&kb_B_results[3],  READONLY);
-    comm_monitorFloat("kb_B_result_4",  (float32_t*)&kb_B_results[4],  READONLY);
-    comm_monitorFloat("kb_B_result_5",  (float32_t*)&kb_B_results[5],  READONLY);
-    comm_monitorFloat("kb_B_result_6",  (float32_t*)&kb_B_results[6],  READONLY);
-    comm_monitorFloat("kb_B_result_7",  (float32_t*)&kb_B_results[7],  READONLY);
-    comm_monitorFloat("kb_B_result_8",  (float32_t*)&kb_B_results[8],  READONLY);
-    comm_monitorFloat("kb_B_result_9",  (float32_t*)&kb_B_results[9],  READONLY);
-
-    // Experiment mode selector.
-    comm_monitorUint32("kb_experiment_mode",         (uint32_t*)&kb_experiment_mode,  READWRITE);
+    // --- Friction & gravity compensation ---
+    comm_monitorFloat("EMG_RAW",(float32_t*)&emg_raw,  READONLY);
+    comm_monitorFloat("EMG_FIL",(float32_t*)&filtred_emg,  READONLY);
 }
 
 /**
@@ -340,43 +264,6 @@ void hapt_Update(void)
     // This makes the filter cut-off immediately responsive to remote changes.
     tao = 1.0f / (wall_filter_fc * 2.0f * PI_F);
 
-    // -----------------------------------------------------------------------
-    // Experiment mode – apply settings once on each mode change
-    //
-    //   Mode 1 (A): no velocity filter  (fc = 1 MHz -> alpha ≈ 1),  350 us
-    //   Mode 2 (B): no velocity filter,                             10 ms
-    //   Mode 3 (C): 50 Hz LP filter,                                350 us
-    //   Mode 4 (D): 50 Hz LP filter,  compensation OFF,             350 us
-    // -----------------------------------------------------------------------
-    if (kb_experiment_mode != kb_prev_exp_mode)
-    {
-        kb_prev_exp_mode = kb_experiment_mode;
-        switch (kb_experiment_mode)
-        {
-            case 1: /* A – no filter, 350 us */
-                wall_filter_fc = 1.0e6f;
-                cbt_SetHapticControllerPeriod(350);
-                break;
-            case 2: /* B – no filter, 10 ms */
-                wall_filter_fc = 1.0e6f;
-                cbt_SetHapticControllerPeriod(10000);
-                break;
-            case 3: /* C – 50 Hz filter, 350 us */
-                wall_filter_fc = 50.0f;
-                cbt_SetHapticControllerPeriod(350);
-                break;
-            case 4: /* D – 50 Hz filter, no compensation, 350 us */
-                wall_filter_fc       = 50.0f;
-                cbt_SetHapticControllerPeriod(350);
-                comp_dry_enabled     = 0;
-                comp_viscous_enabled = 0;
-                comp_gravity_enabled = 0;
-                break;
-            default:
-                break;
-        }
-        // tao will be refreshed at the top of the next cycle from the new wall_filter_fc.
-    }
 
     // Increment the timestamp.
     hapt_timestamp += cbt_GetHapticControllerPeriod();
@@ -517,129 +404,19 @@ void hapt_Update(void)
     hapt_motorTorque += tau_comp;
 
     // -----------------------------------------------------------------------
-    // KB Plot Sweep – auto-ramp K for a fixed B; user signals instability
-    //
-    // Procedure:
-    //   1. Set kb_B_start and kb_B_step, then write 1 to kb_sweep_enabled.
-    //   2. The code starts with B = kb_B_start and K = 0, then increases K
-    //      at kb_K_sweep_rate [N.m/deg/s] every control cycle.
-    //   3. When you feel sustained vibration, write 1 to kb_vibration_detect.
-    //   4. The controller stores the (B, K) pair, increments B by kb_B_step,
-    //      resets K to 0 and begins the next ramp automatically.
-    //   5. After 10 points, kb_sweep_enabled is cleared automatically.
-    //      Results are in kb_K_result_0 … kb_K_result_9 (K_unstable) and
-    //      kb_B_result_0 … kb_B_result_9 (the matching B value).
-    //
-    // To abort at any time: write 0 to kb_sweep_enabled.
-    // -----------------------------------------------------------------------
+	// EMG
+	// -----------------------------------------------------------------------
+    // get raw data
+    emg_raw = adc_GetChannelVoltage(ADC_CHANNEL_6);
 
-    // Detect rising edge of kb_sweep_enabled to (re-)initialise the sweep.
-    if (kb_sweep_enabled && !kb_sweep_was_enabled)
-    {
-        kb_point_index = 0;
-        kb_K_current   = 0.0f;
-        kb_B_current   = kb_B_start;
-        wall_K         = 0.0f;
-        wall_B         = kb_B_current;
-    }
-    kb_sweep_was_enabled = kb_sweep_enabled;
+    // signal processing to extract enveloppe
 
-    if (kb_sweep_enabled && (kb_point_index < KB_NUM_POINTS))
-    {
-        if (kb_vibration_detect)
-        {
-            // Record the (B, K_unstable) pair for the current point.
-            kb_K_results[kb_point_index] = kb_K_current;
-            kb_B_results[kb_point_index] = kb_B_current;
-            kb_point_index++;
 
-            kb_vibration_detect = 0; // Acknowledge flag – user must re-arm.
+    //float32_t alpha_emg  = dt / (tao_emg + dt);
+    //filtred_emg  = alpha_emg * emg_raw + (1.0f - alpha_emg) * prev_fil_emg;
+    //prev_fil_emg = filtred_emg;
 
-            if (kb_point_index >= KB_NUM_POINTS)
-            {
-                // All 10 points collected – stop sweep automatically.
-                kb_sweep_enabled = 0;
-            }
-            else
-            {
-                // Advance to the next damping value and restart K from zero.
-                kb_B_current += kb_B_step;
-                kb_K_current  = 0.0f;
-                wall_K        = 0.0f;
-                wall_B        = kb_B_current;
-            }
-        }
-        else
-        {
-            // Ramp K upward at the configured rate.
-            kb_K_current += kb_K_sweep_rate * dt;
-            wall_K        = kb_K_current;
-            wall_B        = kb_B_current;
-        }
-    }
 
-    // -----------------------------------------------------------------------
-    // Virtual Viscoelastic Walls at φ_wall = ±15°
-    //
-    // Model:  τ_wall = −K · δ  −  B · δ̇
-    //
-    //   δ   = signed penetration beyond the wall boundary [deg]
-    //         δ > 0 when inside the positive wall (angle > +15°)
-    //         δ < 0 when inside the negative wall (angle < −15°)
-    //   δ̇   = filtered velocity [deg/s], used only when the paddle is
-    //         actively penetrating the wall (δ and δ̇ have the same sign)
-    //         to avoid the damper pulling the paddle deeper during rebound.
-    //
-    // The wall filter (shared cut-off wall_filter_fc) is applied to both
-    // the measured angle and the velocity estimate so that high-frequency
-    // quantisation noise does not create torque spikes at high K values.
-    // -----------------------------------------------------------------------
-
-    // Update the wall's dedicated low-pass filters.
-    // alpha is already computed above from tao = 1/(wall_filter_fc · 2π).
-    wall_filtered_angle = alpha * hapt_encoderPaddleAngle
-                        + (1.0f - alpha) * wall_filtered_angle;
-    wall_filtered_vel   = alpha * paddle_velocity_1
-                        + (1.0f - alpha) * wall_filtered_vel;
-
-    float32_t tau_wall = 0.0f;
-
-    if (wall_filtered_angle > WALL_ANGLE)
-    {
-        // ---- Positive wall ----
-        float32_t delta = wall_filtered_angle - WALL_ANGLE;   // penetration depth [deg], > 0
-        wall_penetration = delta;
-
-        // Spring term: always pushes back.
-        tau_wall = -wall_K * delta;
-
-        // Damper term: only when penetrating (positive velocity while in positive wall).
-        // During rebound (negative velocity) the damper is inactive so it does not
-        // resist the natural exit, which would destabilise the interaction.
-        if (wall_filtered_vel > 0.0f)
-            tau_wall -= wall_B * wall_filtered_vel;
-    }
-    else if (wall_filtered_angle < -WALL_ANGLE)
-    {
-        // ---- Negative wall ----
-        float32_t delta = wall_filtered_angle + WALL_ANGLE;   // penetration depth [deg], < 0
-        wall_penetration = -delta;                             // report as positive magnitude
-
-        // Spring term: always pushes back.
-        tau_wall = -wall_K * delta;
-
-        // Damper term: only when penetrating (negative velocity in negative wall).
-        if (wall_filtered_vel < 0.0f)
-            tau_wall -= wall_B * wall_filtered_vel;
-    }
-    else
-    {
-        // Paddle is between the two walls – no wall torque.
-        wall_penetration = 0.0f;
-    }
-
-    wall_torque = tau_wall;
-    hapt_motorTorque += tau_wall;
 
     // Apply the final motor torque.
     torq_SetTorque(hapt_motorTorque);
