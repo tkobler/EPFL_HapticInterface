@@ -154,14 +154,23 @@ static float32_t wall_filtered_vel   = 0.0f;
 // EMG
 // ---------------------------------------------------------------------------
 volatile float32_t emg_raw = 0;
-
-volatile float32_t mov_mean_length = 25;
-
+volatile float32_t amp_emg = 0;
 
 
-volatile float32_t tao_emg  = 1.0f / (100.0f * 2.0f * 3.14159265f);
+
+
+// filter
 float32_t filtred_emg = 0;
-float32_t prev_fil_emg = 0;
+float32_t prev_lp = 0;
+float32_t prev_hp = 0;
+float32_t prev_lp_for_hp = 0;
+float32_t f_low_hz  =  10.0f;  // removes motion artifacts
+float32_t f_high_hz = 400.0f;  // removes high-freq noise
+
+
+
+//volatile float32_t mov_mean_length = 25;
+
 
 /**
   * @brief Initializes the haptic controller.
@@ -409,7 +418,35 @@ void hapt_Update(void)
     // get raw data
     emg_raw = adc_GetChannelVoltage(ADC_CHANNEL_6);
 
-    // signal processing to extract enveloppe
+
+    // signal processing
+    // amplify
+    amp_emg = 1000*emg_raw;
+
+    // band pass filter between 10 - 400 Hz
+    float32_t tao_low  = 1.0f / (2.0f * M_PI * f_high_hz); // low-pass  τ → cuts above f_high
+    float32_t tao_high = 1.0f / (2.0f * M_PI * f_low_hz);  // high-pass τ → cuts below f_low
+    float32_t alpha_low  = dt / (tao_low  + dt);
+    float32_t alpha_high = dt / (tao_high + dt);
+    // 1) Low-pass on raw signal
+    float32_t lp = alpha_low * emg_raw + (1.0f - alpha_low) * prev_lp;
+    prev_lp = lp;
+    // 2) High-pass on the low-passed signal
+    float32_t hp = alpha_high * (prev_hp + lp - prev_lp_for_hp);
+    prev_hp = hp;
+    prev_lp_for_hp = lp;
+
+    filtred_emg = hp;
+
+    // Full wave rectifier (mettre en valeurs absolue) and moving average window
+
+    // envelope
+
+    // normalize
+
+    // torque estimation
+
+
 
 
     //float32_t alpha_emg  = dt / (tao_emg + dt);
