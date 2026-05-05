@@ -24,7 +24,7 @@
 #include "torque_regulator.h"
 #include "drivers/adc.h"
 
-#define DEFAULT_HAPTIC_CONTROLLER_PERIOD 350 // Default control loop period [us].
+#define DEFAULT_HAPTIC_CONTROLLER_PERIOD 1000 // Default control loop period [us]. 350 à la base mais 1000 pour le tp
 
 // Physical limits of the paddle range [deg].
 #define PADDLE_ANGLE_MIN   -45.0f
@@ -155,18 +155,26 @@ static float32_t wall_filtered_vel   = 0.0f;
 // ---------------------------------------------------------------------------
 volatile float32_t emg_raw = 0;
 volatile float32_t amp_emg = 0;
-
-
-
+volatile float32_t RMS_emg = 0;
+volatile float32_t RMS_FIL_emg = 0;
+volatile float32_t prev_lp_pp = 0;
 
 // filter
 float32_t filtred_emg = 0;
 float32_t prev_lp = 0;
 float32_t prev_hp = 0;
 float32_t prev_lp_for_hp = 0;
-float32_t f_low_hz  =  10.0f;  // removes motion artifacts
-float32_t f_high_hz = 400.0f;  // removes high-freq noise
+float32_t f_low_hz  =  400.0f;  // removes motion artifacts
+float32_t f_high_hz = 5.0f;  // removes high-freq noise
+float32_t f_low_hz_pp  =  10.0f;  // removes motion artifacts
 
+// moving average
+const int WINDOW_SIZE = 50;
+
+// Buffer circulaire
+volatile float32_t buffer[50] = {0.0f};
+volatile int       buf_idx             = 0;
+volatile float32_t buf_sum             = 0.0f;
 
 
 //volatile float32_t mov_mean_length = 25;
@@ -257,6 +265,8 @@ void hapt_Init(void)
     // --- Friction & gravity compensation ---
     comm_monitorFloat("EMG_RAW",(float32_t*)&emg_raw,  READONLY);
     comm_monitorFloat("EMG_FIL",(float32_t*)&filtred_emg,  READONLY);
+    comm_monitorFloat("EMG_RMS",(float32_t*)&RMS_emg,  READONLY);
+    comm_monitorFloat("EMG_RMS_FIL",(float32_t*)&RMS_FIL_emg,  READONLY);
 }
 
 /**
@@ -418,10 +428,9 @@ void hapt_Update(void)
     // get raw data
     emg_raw = adc_GetChannelVoltage(ADC_CHANNEL_6);
 
-
     // signal processing
     // amplify
-    amp_emg = 1000*emg_raw;
+    amp_emg = emg_raw;
 
     // band pass filter between 10 - 400 Hz
     float32_t tao_low  = 1.0f / (2.0f * M_PI * f_high_hz); // low-pass  τ → cuts above f_high
@@ -439,19 +448,31 @@ void hapt_Update(void)
     filtred_emg = hp;
 
     // Full wave rectifier (mettre en valeurs absolue) and moving average window
+    //filtred_emg = fabs(filtred_emg);
 
     // envelope
+    RMS_emg = filtred_emg*filtred_emg;
+	buf_sum -= buffer[buf_idx];
+	buffer[buf_idx] = RMS_emg;
+	buf_sum += RMS_emg;
+	buf_idx = (buf_idx + 1) % WINDOW_SIZE;
+	RMS_emg = buf_sum / WINDOW_SIZE;
 
-    // normalize
+	// SECOND FILTERING
+    float32_t tao_low_pp  = 1.0f / (2.0f * M_PI * f_low_hz_pp); // low-pass  τ → cuts above f_high
+    float32_t alpha_low_pp  = dt / (tao_low_pp  + dt);
+    // 1) Low-pass on raw signal
+    float32_t lp_pp = alpha_low_pp * RMS_emg + (1.0f - alpha_low_pp) * prev_lp_pp;
+    prev_lp_pp = lp_pp;
 
-    // torque estimation
+    RMS_FIL_emg = lp_pp;
 
 
+    // torque control
+    hapt_motorTorque = hapt_motorTorque + 100*prev_lp_pp - 0.0010;  // torque control
 
-
-    //float32_t alpha_emg  = dt / (tao_emg + dt);
-    //filtred_emg  = alpha_emg * emg_raw + (1.0f - alpha_emg) * prev_fil_emg;
-    //prev_fil_emg = filtred_emg;
+    // position control
+    //hapt_motorTorque = 0;
 
 
 
