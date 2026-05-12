@@ -27,8 +27,8 @@
 #define DEFAULT_HAPTIC_CONTROLLER_PERIOD 1000 // Default control loop period [us]. 350 à la base mais 1000 pour le tp
 
 // Physical limits of the paddle range [deg].
-#define PADDLE_ANGLE_MIN   -45.0f
-#define PADDLE_ANGLE_MAX    45.0f
+#define PADDLE_ANGLE_MIN   -20.0f
+#define PADDLE_ANGLE_MAX    20.0f
 
 // Torque output saturation limit [N.m].
 #define PID_TORQUE_SAT      0.5f
@@ -71,7 +71,8 @@ float32_t comp_prev_fil_vel_visc   = 0.0f;
 volatile uint32_t  pid_enabled         = 0;
 volatile uint32_t  pid_use_hall        = 0;
 volatile float32_t pid_target_angle    = 0.0f;
-volatile float32_t pid_Kp              = 0.001f;
+volatile float32_t pid_target_angle_prev    = 0.0f;
+volatile float32_t pid_Kp              = 0.012f;
 volatile float32_t pid_Ki              = 0.001f;
 volatile float32_t pid_Kd              = 0.0005f;
 volatile float32_t pid_filter_tao      = 1.0f / (50.0f * 2.0f * 3.14159265f);
@@ -158,6 +159,7 @@ volatile float32_t amp_emg = 0;
 volatile float32_t RMS_emg = 0;
 volatile float32_t RMS_FIL_emg = 0;
 volatile float32_t prev_lp_pp = 0;
+volatile float32_t RMS_NORM_emg = 0;
 
 // filter
 float32_t filtred_emg = 0;
@@ -176,8 +178,8 @@ volatile float32_t buffer[50] = {0.0f};
 volatile int       buf_idx             = 0;
 volatile float32_t buf_sum             = 0.0f;
 
-
-//volatile float32_t mov_mean_length = 25;
+volatile float32_t normalisation = 0;
+volatile float32_t max_biceps = 0.000001;
 
 
 /**
@@ -261,12 +263,14 @@ void hapt_Init(void)
     // Read-only diagnostics.
     comm_monitorFloat("wall_torque [N.m]",     (float32_t*)&wall_torque,      READONLY);
     comm_monitorFloat("wall_penetration [deg]",(float32_t*)&wall_penetration, READONLY);
+    comm_monitorFloat("enable_normalisation",(float32_t*)&normalisation,  READWRITE);
 
     // --- Friction & gravity compensation ---
     comm_monitorFloat("EMG_RAW",(float32_t*)&emg_raw,  READONLY);
     comm_monitorFloat("EMG_FIL",(float32_t*)&filtred_emg,  READONLY);
     comm_monitorFloat("EMG_RMS",(float32_t*)&RMS_emg,  READONLY);
     comm_monitorFloat("EMG_RMS_FIL",(float32_t*)&RMS_FIL_emg,  READONLY);
+    comm_monitorFloat("RMS_NORM_emg",(float32_t*)&RMS_NORM_emg,  READONLY);
 }
 
 /**
@@ -317,45 +321,6 @@ void hapt_Update(void)
     prev_fil_vel = filtred_vel;
     filtred_acc  = alpha * paddle_acc_1 + (1.0f - alpha) * prev_fil_acc;
     prev_fil_acc = filtred_acc;
-
-    // -----------------------------------------------------------------------
-    // PID Position Controller
-    // -----------------------------------------------------------------------
-    if (pid_target_angle < PADDLE_ANGLE_MIN) pid_target_angle = PADDLE_ANGLE_MIN;
-    if (pid_target_angle > PADDLE_ANGLE_MAX) pid_target_angle = PADDLE_ANGLE_MAX;
-
-    if (pid_enabled)
-    {
-        float32_t raw_pos = pid_use_hall ? relative_angle : hapt_encoderPaddleAngle;
-
-        float32_t alpha_pid = dt / (pid_filter_tao + dt);
-        pid_filtered_pos    = alpha_pid * raw_pos + (1.0f - alpha_pid) * pid_filtered_pos;
-        pid_measured_angle  = pid_filtered_pos;
-
-        float32_t error = pid_target_angle - pid_filtered_pos;
-        pid_error = error;
-
-        pid_integral += error * dt;
-
-        float32_t error_derivative = (error - pid_prev_error) / dt;
-        pid_prev_error = error;
-
-        float32_t torque_cmd = pid_Kp * error
-                             + pid_Ki * pid_integral
-                             + pid_Kd * error_derivative;
-
-        if (torque_cmd >  PID_TORQUE_SAT) torque_cmd =  PID_TORQUE_SAT;
-        if (torque_cmd < -PID_TORQUE_SAT) torque_cmd = -PID_TORQUE_SAT;
-
-        pid_torque_output = torque_cmd;
-        hapt_motorTorque  = torque_cmd;
-    }
-    else
-    {
-        pid_integral      = 0.0f;
-        pid_prev_error    = 0.0f;
-        pid_torque_output = 0.0f;
-    }
 
     // -----------------------------------------------------------------------
     // Dry friction estimation
@@ -437,6 +402,12 @@ void hapt_Update(void)
     float32_t tao_high = 1.0f / (2.0f * M_PI * f_low_hz);  // high-pass τ → cuts below f_low
     float32_t alpha_low  = dt / (tao_low  + dt);
     float32_t alpha_high = dt / (tao_high + dt);
+    // Notch 50 Hz
+    float32_t w0 = 2.0f * M_PI * 50.0f / 1000.0f;
+    float32_t r  = 1.0f - (M_PI * 50.0f / (10.0f * 1000.0f));
+    float32_t b0 = 1.0f, b1 = -2.0f*cosf(w0), b2 = 1.0f;
+    float32_t a1 = -2.0f*r*cosf(w0),           a2 = r*r;
+    float32_t x1 = 0.0f, x2 = 0.0f, y1 = 0.0f, y2 = 0.0f;
     // 1) Low-pass on raw signal
     float32_t lp = alpha_low * emg_raw + (1.0f - alpha_low) * prev_lp;
     prev_lp = lp;
@@ -444,11 +415,11 @@ void hapt_Update(void)
     float32_t hp = alpha_high * (prev_hp + lp - prev_lp_for_hp);
     prev_hp = hp;
     prev_lp_for_hp = lp;
+    // 3) Notch 50 Hz
+    float32_t np = b0*hp + b1*x1 + b2*x2 - a1*y1 - a2*y2;
+    x2=x1; x1=hp; y2=y1; y1=np;
 
     filtred_emg = hp;
-
-    // Full wave rectifier (mettre en valeurs absolue) and moving average window
-    //filtred_emg = fabs(filtred_emg);
 
     // envelope
     RMS_emg = filtred_emg*filtred_emg;
@@ -467,14 +438,63 @@ void hapt_Update(void)
 
     RMS_FIL_emg = lp_pp;
 
+    if (normalisation && max_biceps < RMS_FIL_emg)
+    {
+    	max_biceps = RMS_FIL_emg;
+    }
 
-    // torque control
-    hapt_motorTorque = hapt_motorTorque + 100*prev_lp_pp - 0.0010;  // torque control
-
-    // position control
-    //hapt_motorTorque = 0;
+    RMS_NORM_emg = RMS_FIL_emg/max_biceps;
 
 
+    // torque control - ideal at 0.004
+    hapt_motorTorque = hapt_motorTorque + 0.004*RMS_NORM_emg - 0.0010;  // torque control
+
+    // position control - max 0.00004 pour le torque (environ)
+    pid_target_angle = 40.0f * RMS_NORM_emg - 20.0f;
+
+    float32_t delta = pid_target_angle - pid_target_angle_prev;
+    if (delta >= -1.5f && delta <= 1.5f) pid_target_angle = pid_target_angle_prev;
+
+    pid_target_angle_prev = pid_target_angle;
+
+    // -----------------------------------------------------------------------
+    // PID Position Controller
+    // -----------------------------------------------------------------------
+    if (pid_target_angle < PADDLE_ANGLE_MIN) pid_target_angle = PADDLE_ANGLE_MIN;
+    if (pid_target_angle > PADDLE_ANGLE_MAX) pid_target_angle = PADDLE_ANGLE_MAX;
+
+    if (pid_enabled)
+    {
+        float32_t raw_pos = hapt_encoderPaddleAngle;
+
+        float32_t alpha_pid = dt / (pid_filter_tao + dt);
+        pid_filtered_pos    = alpha_pid * raw_pos + (1.0f - alpha_pid) * pid_filtered_pos;
+        pid_measured_angle  = pid_filtered_pos;
+
+        float32_t error = pid_target_angle - pid_filtered_pos;
+        pid_error = error;
+
+        pid_integral += error * dt;
+
+        float32_t error_derivative = (error - pid_prev_error) / dt;
+        pid_prev_error = error;
+
+        float32_t torque_cmd = pid_Kp * error
+                             + pid_Ki * pid_integral
+                             + pid_Kd * error_derivative;
+
+        if (torque_cmd >  PID_TORQUE_SAT) torque_cmd =  PID_TORQUE_SAT;
+        if (torque_cmd < -PID_TORQUE_SAT) torque_cmd = -PID_TORQUE_SAT;
+
+        pid_torque_output = torque_cmd;
+        hapt_motorTorque  += torque_cmd;
+    }
+    else
+    {
+        pid_integral      = 0.0f;
+        pid_prev_error    = 0.0f;
+        pid_torque_output = 0.0f;
+    }
 
     // Apply the final motor torque.
     torq_SetTorque(hapt_motorTorque);
