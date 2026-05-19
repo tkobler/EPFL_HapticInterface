@@ -72,9 +72,9 @@ volatile uint32_t  pid_enabled         = 0;
 volatile uint32_t  pid_use_hall        = 0;
 volatile float32_t pid_target_angle    = 0.0f;
 volatile float32_t pid_target_angle_prev    = 0.0f;
-volatile float32_t pid_Kp              = 0.012f;
-volatile float32_t pid_Ki              = 0.001f;
-volatile float32_t pid_Kd              = 0.0005f;
+volatile float32_t pid_Kp              = 0.012f;   // TODO : à modifier
+volatile float32_t pid_Ki              = 0.001f;    // TODO : à modifier
+volatile float32_t pid_Kd              = 0.0005f;   // TODO : à modifier
 volatile float32_t pid_filter_tao      = 1.0f / (50.0f * 2.0f * 3.14159265f);
 volatile float32_t pid_error           = 0.0f;
 volatile float32_t pid_torque_output   = 0.0f;
@@ -168,7 +168,7 @@ float32_t prev_hp = 0;
 float32_t prev_lp_for_hp = 0;
 float32_t f_low_hz  =  400.0f;  // removes motion artifacts
 float32_t f_high_hz = 5.0f;  // removes high-freq noise
-float32_t f_low_hz_pp  =  10.0f;  // removes motion artifacts
+float32_t f_low_hz_pp  =  10.0f;  // removes motion artifacts   // TODO : à modifier
 
 // moving average
 const int WINDOW_SIZE = 50;
@@ -180,6 +180,9 @@ volatile float32_t buf_sum             = 0.0f;
 
 volatile float32_t normalisation = 0;
 volatile float32_t max_biceps = 0.000001;
+volatile float32_t min_biceps = 0.0000001;
+volatile float32_t fatigue_treshold = 0;
+
 
 
 /**
@@ -438,22 +441,38 @@ void hapt_Update(void)
 
     RMS_FIL_emg = lp_pp;
 
-    if (normalisation && max_biceps < RMS_FIL_emg)
+    if (normalisation != 0)
     {
-    	max_biceps = RMS_FIL_emg;
+    	if (normalisation == 1)
+    	{
+    		min_biceps = RMS_FIL_emg;
+    	}
+        if (normalisation == 2)
+        {
+            max_biceps = RMS_FIL_emg;
+        }
+        
     }
 
-    RMS_NORM_emg = RMS_FIL_emg/max_biceps;
-
+    RMS_NORM_emg = (RMS_FIL_emg - min_biceps)/max_biceps; // entre 0 et 1
 
     // torque control - ideal at 0.004
-    hapt_motorTorque = hapt_motorTorque + 0.004*RMS_NORM_emg - 0.0010;  // torque control
+    //hapt_motorTorque = hapt_motorTorque + 0.004*RMS_NORM_emg - 0.0010;  // torque control
 
     // position control - max 0.00004 pour le torque (environ)
     pid_target_angle = 40.0f * RMS_NORM_emg - 20.0f;
 
+    // mapping avec dead zone pour éviter les problèmes de bruit du signal EMG à faible amplitude
+    // on a 40 degrés par pas de 5 degrés. Il nous faut une table de mapping t.q. 40 deg correspond a max_biceps et ensuite en décend mais de manière non lin.
+    // TODO : implémenter la table de mapping
+    // ajouté un delta pour maintenir la position cible si le changement est trop rapide (pour éviter les sauts dus au bruit du signal EMG)
     float32_t delta = pid_target_angle - pid_target_angle_prev;
-    if (delta >= -1.5f && delta <= 1.5f) pid_target_angle = pid_target_angle_prev;
+    if (pid_target_angle > 30) fatigue_treshold = 1.5;  /// TODO : à modifier
+    elseif (pid_target_angle > 20) fatigue_treshold = 1.5; 
+    elseif (pid_target_angle > 10) fatigue_treshold = 1.5; 
+    else fatigue_treshold = 1.5; 
+
+    if (delta >= -fatigue_treshold && delta <= fatigue_treshold) pid_target_angle = pid_target_angle_prev;
 
     pid_target_angle_prev = pid_target_angle;
 
