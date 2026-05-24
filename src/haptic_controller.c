@@ -68,11 +68,11 @@ float32_t comp_prev_fil_vel_visc   = 0.0f;
 // ---------------------------------------------------------------------------
 // PID Position Controller
 // ---------------------------------------------------------------------------
-volatile uint32_t  pid_enabled         = 0;
+volatile uint32_t  pid_enabled         = 1;
 volatile uint32_t  pid_use_hall        = 0;
 volatile float32_t pid_target_angle    = 0.0f;
 volatile float32_t pid_target_angle_prev    = 0.0f;
-volatile float32_t pid_Kp              = 0.012f;   // TODO : à modifier
+volatile float32_t pid_Kp              = 0.008f;   // TODO : à modifier
 volatile float32_t pid_Ki              = 0.001f;    // TODO : à modifier
 volatile float32_t pid_Kd              = 0.0005f;   // TODO : à modifier
 volatile float32_t pid_filter_tao      = 1.0f / (50.0f * 2.0f * 3.14159265f);
@@ -168,7 +168,7 @@ float32_t prev_hp = 0;
 float32_t prev_lp_for_hp = 0;
 float32_t f_low_hz  =  400.0f;  // removes motion artifacts
 float32_t f_high_hz = 5.0f;  // removes high-freq noise
-float32_t f_low_hz_pp  =  10.0f;  // removes motion artifacts   // TODO : à modifier
+float32_t f_low_hz_pp  =  0.50f;  // removes motion artifacts   // TODO : à modifier
 
 // moving average
 const int WINDOW_SIZE = 50;
@@ -179,10 +179,15 @@ volatile int       buf_idx             = 0;
 volatile float32_t buf_sum             = 0.0f;
 
 volatile float32_t normalisation = 0;
-volatile float32_t max_biceps = 0.000001;
-volatile float32_t min_biceps = 0.0000001;
+volatile float32_t max_biceps = 0.00002; // à mettre à 0 TODO
+volatile float32_t sum = 0.0f;
+volatile float32_t n = 0;
+volatile float32_t min_biceps = 0.000000002; // à mettre plus petit TODO
 volatile float32_t fatigue_treshold = 0;
-
+volatile float32_t p_t_a = 0;// previous target angle
+volatile float32_t angle_angle_control = 0;
+volatile float32_t angle_torque_control = 0;
+volatile float32_t select_control = 0;
 
 
 /**
@@ -274,6 +279,9 @@ void hapt_Init(void)
     comm_monitorFloat("EMG_RMS",(float32_t*)&RMS_emg,  READONLY);
     comm_monitorFloat("EMG_RMS_FIL",(float32_t*)&RMS_FIL_emg,  READONLY);
     comm_monitorFloat("RMS_NORM_emg",(float32_t*)&RMS_NORM_emg,  READONLY);
+    comm_monitorFloat("target_angle [deg]", (float32_t*)&pid_target_angle, READWRITE);
+    comm_monitorFloat("Control type", (float32_t*)&select_control, READWRITE);
+
 }
 
 /**
@@ -289,7 +297,6 @@ void hapt_Update(void)
     // Recompute tao from the (possibly updated) wall_filter_fc each cycle.
     // This makes the filter cut-off immediately responsive to remote changes.
     tao = 1.0f / (wall_filter_fc * 2.0f * PI_F);
-
 
     // Increment the timestamp.
     hapt_timestamp += cbt_GetHapticControllerPeriod();
@@ -325,31 +332,6 @@ void hapt_Update(void)
     filtred_acc  = alpha * paddle_acc_1 + (1.0f - alpha) * prev_fil_acc;
     prev_fil_acc = filtred_acc;
 
-    // -----------------------------------------------------------------------
-    // Dry friction estimation
-    // -----------------------------------------------------------------------
-    if (stiction_mode != 0 && !pid_enabled)
-    {
-        stict_hold++;
-        if (stict_hold >= 10)
-        {
-            stict_hold = 0;
-            float32_t dir = (stiction_mode == 1) ? 1.0f : -1.0f;
-
-            if (fabsf(filtred_vel) > vel_threshold)
-            {
-                stiction_found   = stict_torque;
-                stict_torque     = 0.0f;
-                stiction_mode    = 0;
-                hapt_motorTorque = 0.0f;
-            }
-            else
-            {
-                stict_torque    += dir * stiction_step;
-                hapt_motorTorque = stict_torque;
-            }
-        }
-    }
 
     // -----------------------------------------------------------------------
     // Friction and gravity compensation
@@ -445,9 +427,11 @@ void hapt_Update(void)
     {
     	if (normalisation == 1)
     	{
-    		min_biceps = RMS_FIL_emg;
+    		n += 1;
+            sum += RMS_FIL_emg;
+            min_biceps = sum / n;
     	}
-        if (normalisation == 2)
+        if (normalisation == 2 && RMS_FIL_emg > max_biceps)
         {
             max_biceps = RMS_FIL_emg;
         }
@@ -457,24 +441,33 @@ void hapt_Update(void)
     RMS_NORM_emg = (RMS_FIL_emg - min_biceps)/max_biceps; // entre 0 et 1
 
     // torque control - ideal at 0.004
-    //hapt_motorTorque = hapt_motorTorque + 0.004*RMS_NORM_emg - 0.0010;  // torque control
+    angle_torque_control = hapt_motorTorque + 0.0004*RMS_NORM_emg - 0.0010;  // torque control
 
     // position control - max 0.00004 pour le torque (environ)
-    pid_target_angle = 40.0f * RMS_NORM_emg - 20.0f;
+    pid_target_angle = 40.0f * RMS_NORM_emg - 20;
+    angle_angle_control = pid_target_angle;
 
     // mapping avec dead zone pour éviter les problèmes de bruit du signal EMG à faible amplitude
     // on a 40 degrés par pas de 5 degrés. Il nous faut une table de mapping t.q. 40 deg correspond a max_biceps et ensuite en décend mais de manière non lin.
     // TODO : implémenter la table de mapping
-    // ajouté un delta pour maintenir la position cible si le changement est trop rapide (pour éviter les sauts dus au bruit du signal EMG)
+    // ajouté un delta pour maintenir la position cible si le changement est trop rapide (pour éviter les sauts dus au bruit du signal EMG
     float32_t delta = pid_target_angle - pid_target_angle_prev;
-    if (pid_target_angle > 30) fatigue_treshold = 1.5;  /// TODO : à modifier
-    elseif (pid_target_angle > 20) fatigue_treshold = 1.5; 
-    elseif (pid_target_angle > 10) fatigue_treshold = 1.5; 
-    else fatigue_treshold = 1.5; 
+    if (pid_target_angle > 10) fatigue_treshold = 5;  /// TODO : à modifier
+    else if (pid_target_angle > 0) fatigue_treshold = 4;
+    else if (pid_target_angle > -10) fatigue_treshold = 3;
+    else fatigue_treshold = 1;
 
     if (delta >= -fatigue_treshold && delta <= fatigue_treshold) pid_target_angle = pid_target_angle_prev;
 
     pid_target_angle_prev = pid_target_angle;
+
+    if (select_control == 1) pid_target_angle = angle_angle_control;
+    else if (select_control == 2)
+    {
+    	pid_enabled = false;
+    	hapt_motorTorque = angle_torque_control;
+    }
+
 
     // -----------------------------------------------------------------------
     // PID Position Controller
@@ -482,6 +475,7 @@ void hapt_Update(void)
     if (pid_target_angle < PADDLE_ANGLE_MIN) pid_target_angle = PADDLE_ANGLE_MIN;
     if (pid_target_angle > PADDLE_ANGLE_MAX) pid_target_angle = PADDLE_ANGLE_MAX;
 
+    //pid_enabled = false;
     if (pid_enabled)
     {
         float32_t raw_pos = hapt_encoderPaddleAngle;
