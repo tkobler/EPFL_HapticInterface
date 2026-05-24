@@ -179,10 +179,10 @@ volatile int       buf_idx             = 0;
 volatile float32_t buf_sum             = 0.0f;
 
 volatile float32_t normalisation = 0;
-volatile float32_t max_biceps = 0.00002; // à mettre à 0 TODO
+volatile float32_t max_biceps = 0.0000001; // à mettre à 0 TODO
 volatile float32_t sum = 0.0f;
 volatile float32_t n = 0;
-volatile float32_t min_biceps = 0.000000002; // à mettre plus petit TODO
+volatile float32_t min_biceps = 0.0000000002; // à mettre plus petit TODO
 volatile float32_t fatigue_treshold = 0;
 volatile float32_t p_t_a = 0;// previous target angle
 volatile float32_t angle_angle_control = 0;
@@ -441,7 +441,7 @@ void hapt_Update(void)
     RMS_NORM_emg = (RMS_FIL_emg - min_biceps)/max_biceps; // entre 0 et 1
 
     // torque control - ideal at 0.004
-    angle_torque_control = hapt_motorTorque + 0.0004*RMS_NORM_emg - 0.0010;  // torque control
+    angle_torque_control = hapt_motorTorque + 0.0005*RMS_NORM_emg - 0.0010;  // torque control
 
     // position control - max 0.00004 pour le torque (environ)
     pid_target_angle = 40.0f * RMS_NORM_emg - 20;
