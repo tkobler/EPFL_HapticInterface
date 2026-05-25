@@ -167,6 +167,7 @@ fprintf('Enhanced Position Control (S2): %d repetitions found\n', numel(onsetIdx
 %% Figure 1 – Time-series with coloured repetition backgrounds
 %% ========================================================================
 fig1 = figure('Color', [1 1 1], 'Name', 'Time Series + Repetitions');
+set(fig1, 'Position', [100 100 1200 400]);
 ax1  = axes('Parent', fig1);
 hold(ax1, 'on');
 
@@ -199,6 +200,7 @@ legend(ax1, [h1, h2, hPatch1, hPatch2], ...
 hold(ax1, 'off');
 %%%
 fig2 = figure('Color', [1 1 1], 'Name', 'Time Series + Repetitions');
+set(fig2, 'Position', [100 100 1200 400]);
 ax1  = axes('Parent', fig2);
 hold(ax1, 'on');
 
