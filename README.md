@@ -34,7 +34,7 @@ Each folder has its own README.
 
 - STM32F407 microcontroller (STM32F407G-DISC1 board description in `STM32F407G-DISC1.xml`)
 - EPFL REHAssist board with the 1-DoF haptic paddle (motor, incremental encoder, Hall sensor)
-- Biceps sensor read on an ADC channel
+- Biceps EMG sensor read on an ADC channel
 
 ## Build
 
@@ -49,7 +49,7 @@ The generated Doxygen documentation (`doc/html`) is no longer versioned. To rege
 ## Team
 
 - Tim Kobler
-- Claudie-gd (teammate). She contributed the step-response analysis script `tp2_4.m` (used in TP2) and added the experiment plots and MATLAB tools to the repository.
+- Claudie-gd (teammate): contributed the step-response analysis script `tp2_4.m` (used in TP2) and added the experiment plots and MATLAB tools to the repository.
 
 ## License
 
