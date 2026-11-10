@@ -1,3 +1,6 @@
 .settings/
 /Debug/
 /Release/
+Debug/
+.DS_Store
+doc/html/
