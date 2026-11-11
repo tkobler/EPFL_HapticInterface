@@ -53,4 +53,4 @@ The generated Doxygen documentation (`doc/html`) is no longer versioned. To rege
 
 ## License
 
-The course skeleton comes from EPFL-REHAssist (Rehabilitation and Assistive Robotics Group) and is under the Apache License 2.0, as stated in the headers of the source files. Keep these headers when reusing the code. The repository does not contain a separate `LICENSE` file.
+This repository is distributed under the [Apache License 2.0](LICENSE), the same license as the EPFL-REHAssist (Rehabilitation and Assistive Robotics Group) course skeleton it is built on. Keep the license headers of the source files when reusing the code.
