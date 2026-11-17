@@ -1,0 +1,6 @@
+# TP2 - Paddle model and PID position control
+
+- `main.m` and `HapticPaddle.slx`: MATLAB/Simulink model of the paddle (inertia, viscous and dry friction, gravity) used to design and tune a PID controller.
+- `haptic_controller.c`: firmware PID position controller (encoder or Hall feedback, filtered position, torque saturation, gains tunable from the PC).
+- `tp2_4.m`: computes rise time, overshoot and settling time from a logged step response (expects a log CSV in a `log/` folder; it reads `log/log_2026-03-25_17-35-23.csv`, so run it from the repository root, where the lab session logs are in [`log/`](../../log)).
+- `pid_block_diagram.png`: structure of the PID block used in the Simulink model.
