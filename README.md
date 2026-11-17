@@ -49,7 +49,7 @@ The generated Doxygen documentation (`doc/html`) is no longer versioned. To rege
 ## Team
 
 - Tim Kobler
-- Claudie-gd (teammate): contributed the step-response analysis script `tp2_4.m` (used in TP2) and added the experiment plots and MATLAB tools to the repository.
+- Claudie-gd (teammate)
 
 ## License
 
